@@ -1,36 +1,197 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Jarvis
 
-## Getting Started
+Jarvis is a self-hosted web frontend for local AI chat. It talks to [Ollama](https://ollama.com) over HTTP, streams responses, and keeps conversation history on the browser.
 
-First, run the development server:
+The long-term goal is a homelab orchestration layer. This first version is deliberately smaller: select a model, chat, stream, continue the conversation.
+
+## Architecture
+
+```text
+Browser (LAN)
+    ↓
+Jarvis UI  →  Jarvis API  →  AI provider  →  Ollama HTTP API
+```
+
+The UI never calls Ollama directly. Ollama is treated as an external inference service, configured with `OLLAMA_BASE_URL`. On the first Ubuntu VM that can be `http://localhost:11434`. Later it can point at another machine without changing application code.
+
+Do not expose Ollama's port to the internet. Other devices on the LAN should use Jarvis (port 3000), not Ollama (port 11434).
+
+## Requirements
+
+- Ubuntu Server or Desktop (the intended runtime)
+- Node.js 20 or newer
+- npm
+- Ollama
+- At least one pulled Ollama model
+
+## Ubuntu VM setup
+
+### 1. Install Node.js
+
+Using NodeSource (Node 22):
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+node -v
+npm -v
+```
+
+### 2. Install Ollama
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+### 3. Start Ollama
+
+Ollama typically installs as a systemd service and listens on `127.0.0.1:11434`:
+
+```bash
+sudo systemctl enable --now ollama
+sudo systemctl status ollama
+```
+
+Confirm locally:
+
+```bash
+curl http://localhost:11434/api/tags
+```
+
+Leave Ollama bound to localhost while it shares the VM with Jarvis. If you later move Ollama to another host, set `OLLAMA_HOST=0.0.0.0:11434` **on that host only**, restrict it to the LAN, and point Jarvis at that URL. Do not publish port 11434 to the public internet.
+
+### 4. Add models
+
+```bash
+ollama pull llama3.2
+```
+
+Use any model you want. Jarvis reads the live model list from Ollama; names are not hard-coded. Newly pulled models appear in the selector (it refreshes on open, on window focus, and every 30 seconds).
+
+### 5. Install Jarvis
+
+```bash
+git clone <your-repo-url> ~/jarvis
+cd ~/jarvis
+cp .env.example .env
+npm install
+```
+
+Edit `.env` if Ollama is not on localhost:
+
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+```
+
+### 6. Start Jarvis
+
+Development:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+On the VM, for normal use:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build
+npm start
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Both bind to `0.0.0.0:3000` so other machines on the LAN can connect.
 
-## Learn More
+### 7. Access from another machine
 
-To learn more about Next.js, take a look at the following resources:
+On the Ubuntu VM:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+hostname -I
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+From a laptop or tablet on the same network, open:
 
-## Deploy on Vercel
+```text
+http://<vm-lan-ip>:3000
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+If you use `npm run dev` from another device and the browser is blocked, set `ALLOWED_DEV_ORIGINS` in `.env` to that client's IP (no protocol), or use `npm start` instead.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 8. Firewall
+
+If UFW is enabled, allow Jarvis from the LAN only. Example for a typical home network:
+
+```bash
+sudo ufw allow from 192.168.0.0/16 to any port 3000 proto tcp
+sudo ufw deny 11434
+sudo ufw reload
+sudo ufw status
+```
+
+Adjust the LAN range to match your network (`10.0.0.0/8`, `172.16.0.0/12`, or a single trusted IP). Do not open Ollama (11434) to the world.
+
+### 9. Configure the Ollama URL
+
+| Setup | `OLLAMA_BASE_URL` |
+| --- | --- |
+| Ollama on the same VM | `http://localhost:11434` |
+| Ollama on another LAN host | `http://192.168.x.x:11434` |
+
+Restart Jarvis after changing the value. No code changes are required.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama HTTP API base URL |
+| `ALLOWED_DEV_ORIGINS` | unset | Extra hostnames allowed to use `next dev` from the LAN |
+
+Copy `.env.example` to `.env` or `.env.local`. Secrets and hostnames stay in environment variables; nothing is hard-coded.
+
+There is no telemetry. Prompts and conversations are sent only to the configured Ollama URL.
+
+## Usage
+
+1. Open Jarvis in a browser.
+2. Confirm the status indicator shows Ollama connected.
+3. Select a model.
+4. Send a message.
+5. Stop, regenerate, or copy assistant replies as needed.
+6. Use the sidebar for conversation history. History is stored in the browser (`localStorage`) for this version.
+
+## Project structure
+
+```text
+app/                 Next.js App Router (UI + API routes)
+  api/chat/          Streaming chat (SSE)
+  api/models/        Live Ollama model list
+  api/health/        Ollama connectivity
+components/          Chat UI
+lib/
+  ai/                Provider interface, Ollama adapter, router
+  client/            Browser calls to the Jarvis API
+  conversations/     localStorage persistence (swap-ready for a database)
+  config.ts          Environment configuration
+```
+
+Adding another inference backend later means implementing `AIProvider` and teaching `lib/ai/router.ts` how to choose it. The UI should not need to know.
+
+## Development
+
+```bash
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Then open `http://localhost:3000`.
+
+```bash
+npm run lint
+npm run build
+```
+
+This layout is compatible with later containerisation: configuration is via environment variables, and the HTTP server binds to `0.0.0.0`. Docker is not required for this version.
+
+## What this version does not include
+
+Routing between multiple models/GPUs, tool calling, voice, long-term memory, and Home Assistant are intentionally out of scope. The provider/router split is the extension point for those later.
