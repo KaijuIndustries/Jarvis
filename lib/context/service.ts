@@ -153,15 +153,22 @@ export async function deleteContextItem(id: string): Promise<void> {
   }
 }
 
+const PROMPT_CONTEXT_LIMIT = 100;
+
 /**
- * Reserved for chat prompt assembly. Returns nothing this milestone
- * so we do not dump the whole context table into every Ollama request.
+ * Read-only retrieval for chat. Returns stored facts only (no writes).
+ * Failures return an empty list so chat can continue without context.
  */
 export async function selectContextForPrompt(
   messages: ChatMessage[],
 ): Promise<ContextItem[]> {
   void messages;
-  return [];
+  try {
+    const items = await listContextItems();
+    return items.slice(0, PROMPT_CONTEXT_LIMIT);
+  } catch {
+    return [];
+  }
 }
 
 function isUniqueViolation(error: unknown): boolean {

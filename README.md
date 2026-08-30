@@ -165,6 +165,8 @@ Restrict search per model with `WEB_SEARCH_MODELS`. Example: `WEB_SEARCH_MODELS=
 6. Use the sidebar for conversation history. History is stored in the browser (`localStorage`) for this version.
 7. Open **Directory → Context** to add persistent facts, or **Knowledge** to upload documents.
 
+Facts stored in Context are read on each chat request and sent to Ollama as a trusted system message. Chat never writes context automatically. Knowledge documents are stored only; RAG is not implemented yet.
+
 ## Project structure
 
 ```text
@@ -179,7 +181,7 @@ components/          Chat UI and Directory views
 lib/
   ai/                Provider interface, Ollama adapter, web search client
   tools/             Tool registry (web_search first; others later)
-  context/           Persistent context service (prompt selection reserved)
+  context/           Persistent context CRUD and chat prompt injection
   knowledge/         Document storage service
   db/                PostgreSQL pool
   client/            Browser calls to the Jarvis API
@@ -204,6 +206,7 @@ Then open `http://localhost:3000`.
 
 ```bash
 npm run lint
+npm test
 npm run build
 ```
 
@@ -229,4 +232,4 @@ This layout is compatible with later containerisation: configuration is via envi
 
 ## What this version does not include
 
-Routing between multiple models/GPUs, ComfyUI, voice, automatic memory extraction, RAG, and Home Assistant are intentionally out of scope. Web search is an optional backend tool, not a full agent loop.
+Routing between multiple models/GPUs, ComfyUI, voice, automatic memory extraction (SAVE/UPDATE/IGNORE), RAG, and Home Assistant are intentionally out of scope. Persistent context is injected into chat as a read-only system message. Web search is an optional backend tool, not a full agent loop.
