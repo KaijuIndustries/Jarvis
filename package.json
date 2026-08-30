@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start --hostname 0.0.0.0 --port 3000",
     "lint": "eslint",
+    "migrate": "node scripts/migrate.mjs",
+    "migrate:status": "node scripts/migrate.mjs --status",
     "db:migrate": "node scripts/migrate.mjs",
     "db:status": "node scripts/migrate.mjs --status"
   },

@@ -213,9 +213,11 @@ PostgreSQL is expected on port 5432 (for example Docker container `jarvis-postgr
 
 ```bash
 # After setting DATABASE_URL in .env or .env.local
-npm run db:migrate
-npm run db:status
+npm run migrate
+npm run migrate:status
 ```
+
+`npm run db:migrate` and `npm run db:status` do the same thing.
 
 Migrations are additive and do not drop existing data. Uploaded files live in `data/uploads/` (gitignored). Context and document metadata live in PostgreSQL.
 
