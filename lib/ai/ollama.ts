@@ -118,6 +118,7 @@ export const ollamaProvider: AIProvider = {
         model: params.model,
         messages: params.messages,
         stream: true,
+        think: false,
       }),
     });
 
