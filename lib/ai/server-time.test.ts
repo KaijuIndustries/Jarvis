@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatServerDateTime, queryNeedsServerTime } from "./server-time.ts";
+import {
+  formatLocalCivilTime,
+  formatServerDateTime,
+  queryNeedsServerTime,
+} from "./server-time.ts";
 
 test("detects common date and time questions", () => {
   assert.equal(queryNeedsServerTime("what time is it"), true);
@@ -16,13 +20,21 @@ test("ignores unrelated questions", () => {
   assert.equal(queryNeedsServerTime("tell me about Friday"), false);
 });
 
-test("formats a fixed instant without leaking guessed dates", () => {
+test("uses local Date fields and does not present UTC/ISO as local", () => {
   const now = new Date("2026-08-30T21:26:00.000Z");
-  const block = formatServerDateTime(now, "UTC");
+  const block = formatServerDateTime(now);
+  const civil = formatLocalCivilTime(now);
+  const localHour = String(now.getHours()).padStart(2, "0");
+  const utcHour = String(now.getUTCHours()).padStart(2, "0");
+
   assert.match(block, /Trusted server clock/);
-  assert.match(block, /Current server date and time:/);
-  assert.match(block, /Sunday/);
-  assert.match(block, /30 August 2026/);
-  assert.match(block, /21:26:00/);
-  assert.match(block, /\(UTC\)/);
+  assert.match(block, /Current server local date and time:/);
+  assert.ok(block.includes(civil));
+  assert.doesNotMatch(block, /2026-08-30T21:26:00\.000Z/);
+  assert.doesNotMatch(block, /toISOString/);
+
+  if (now.getHours() !== now.getUTCHours()) {
+    assert.match(block, new RegExp(`${localHour}:26:00`));
+    assert.doesNotMatch(block, new RegExp(`${utcHour}:26:00`));
+  }
 });
