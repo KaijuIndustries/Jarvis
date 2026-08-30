@@ -2,7 +2,9 @@
 
 import type { Conversation } from "@/lib/conversations/types";
 import { formatRelativeTime } from "@/lib/format";
-import { MarkIcon, PlusIcon, SettingsIcon, SidebarIcon, TrashIcon } from "./icons";
+import { FolderIcon, MarkIcon, PlusIcon, SettingsIcon, SidebarIcon, TrashIcon } from "./icons";
+
+export type ShellView = "chat" | "context" | "knowledge";
 
 type SidebarProps = {
   conversations: Conversation[];
@@ -15,6 +17,8 @@ type SidebarProps = {
   onToggleCollapsed: () => void;
   onCloseMobile: () => void;
   onOpenSettings: () => void;
+  view: ShellView;
+  onChangeView: (view: ShellView) => void;
 };
 
 export function Sidebar({
@@ -28,6 +32,8 @@ export function Sidebar({
   onToggleCollapsed,
   onCloseMobile,
   onOpenSettings,
+  view,
+  onChangeView,
 }: SidebarProps) {
   return (
     <>
@@ -66,6 +72,35 @@ export function Sidebar({
         </div>
 
         <div className="px-2 pb-2">
+          {!collapsed ? (
+            <p className="px-2.5 pb-1.5 text-[11px] font-medium tracking-[0.12em] text-muted uppercase">
+              Directory
+            </p>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => onChangeView("context")}
+            className={`mb-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[13px] ${
+              view === "context"
+                ? "bg-surface-2 text-foreground"
+                : "text-muted hover:bg-surface-2 hover:text-foreground"
+            } ${collapsed ? "justify-center px-0" : ""}`}
+          >
+            <FolderIcon className="h-4 w-4 shrink-0" />
+            {!collapsed ? <span>Context</span> : null}
+          </button>
+          <button
+            type="button"
+            onClick={() => onChangeView("knowledge")}
+            className={`mb-3 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[13px] ${
+              view === "knowledge"
+                ? "bg-surface-2 text-foreground"
+                : "text-muted hover:bg-surface-2 hover:text-foreground"
+            } ${collapsed ? "justify-center px-0" : ""}`}
+          >
+            <FolderIcon className="h-4 w-4 shrink-0" />
+            {!collapsed ? <span>Knowledge</span> : null}
+          </button>
           <button
             type="button"
             onClick={onNew}
@@ -97,7 +132,10 @@ export function Sidebar({
                       >
                         <button
                           type="button"
-                          onClick={() => onSelect(conversation.id)}
+                          onClick={() => {
+                            onChangeView("chat");
+                            onSelect(conversation.id);
+                          }}
                           className="min-w-0 flex-1 px-2.5 py-2 text-left"
                         >
                           <span className="block truncate text-[13px]">

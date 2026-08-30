@@ -146,6 +146,7 @@ Restart Jarvis after changing the value. No code changes are required.
 | `OLLAMA_API_KEY` | unset | Ollama web search key (server-side only; can also be saved in Settings) |
 | `OLLAMA_WEB_SEARCH_URL` | `https://ollama.com/api/web_search` | Hosted web search endpoint |
 | `WEB_SEARCH_MODELS` | `*` | Models allowed to use web search (`*` or comma-separated IDs) |
+| `DATABASE_URL` | unset | PostgreSQL connection string (server-side only) |
 | `ALLOWED_DEV_ORIGINS` | unset | Extra hostnames allowed to use `next dev` from the LAN |
 
 Copy `.env.example` to `.env` or `.env.local`. Secrets and hostnames stay in environment variables; nothing is hard-coded.
@@ -162,6 +163,7 @@ Restrict search per model with `WEB_SEARCH_MODELS`. Example: `WEB_SEARCH_MODELS=
 4. Send a message.
 5. Stop, regenerate, or copy assistant replies as needed.
 6. Use the sidebar for conversation history. History is stored in the browser (`localStorage`) for this version.
+7. Open **Directory → Context** to add persistent facts, or **Knowledge** to upload documents.
 
 ## Project structure
 
@@ -171,14 +173,21 @@ app/                 Next.js App Router (UI + API routes)
   api/models/        Live Ollama model list
   api/health/        Ollama connectivity
   api/settings/      Server-side Ollama API key status/save/clear
-components/          Chat UI
+  api/context/       Persistent context CRUD
+  api/documents/     Knowledge document upload/list/delete
+components/          Chat UI and Directory views
 lib/
   ai/                Provider interface, Ollama adapter, web search client
   tools/             Tool registry (web_search first; others later)
+  context/           Persistent context service (prompt selection reserved)
+  knowledge/         Document storage service
+  db/                PostgreSQL pool
   client/            Browser calls to the Jarvis API
   conversations/     localStorage persistence (swap-ready for a database)
   secrets.ts         Server-only API key store
   config.ts          Environment configuration
+migrations/          SQL migrations
+scripts/migrate.mjs  Migration runner
 ```
 
 Adding another inference backend later means implementing `AIProvider` and teaching `lib/ai/router.ts` how to choose it. The UI should not need to know.
@@ -198,8 +207,24 @@ npm run lint
 npm run build
 ```
 
+## Database
+
+PostgreSQL is expected on port 5432 (for example Docker container `jarvis-postgres`, database `jarvis`). Jarvis never connects from the browser.
+
+```bash
+# After setting DATABASE_URL in .env or .env.local
+npm run db:migrate
+npm run db:status
+```
+
+Migrations are additive and do not drop existing data. Uploaded files live in `data/uploads/` (gitignored). Context and document metadata live in PostgreSQL.
+
+pgvector is enabled by the first migration. Chunk/embedding tables are not created yet; a later RAG migration can add `document_chunks` with a `vector` column.
+
+To rebuild only the Jarvis schema in a disposable database, create a new empty database and run `npm run db:migrate`. Do not drop a database that already has data you care about.
+
 This layout is compatible with later containerisation: configuration is via environment variables, and the HTTP server binds to `0.0.0.0`. Docker is not required for this version.
 
 ## What this version does not include
 
-Routing between multiple models/GPUs, ComfyUI, voice, long-term memory, and Home Assistant are intentionally out of scope. Web search is an optional backend tool, not a full agent loop.
+Routing between multiple models/GPUs, ComfyUI, voice, automatic memory extraction, RAG, and Home Assistant are intentionally out of scope. Web search is an optional backend tool, not a full agent loop.

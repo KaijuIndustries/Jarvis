@@ -1,4 +1,5 @@
 import { getAIProvider, type ChatMessage } from "@/lib/ai";
+import { selectContextForPrompt } from "@/lib/context/service";
 import { queryNeedsWebSearch } from "@/lib/tools/needs-search";
 import { modelHasTool } from "@/lib/tools/access";
 import { runTool } from "@/lib/tools/registry";
@@ -105,6 +106,8 @@ export async function POST(request: Request) {
       };
 
       try {
+        // Next milestone: attach selectContextForPrompt() results. Unused now.
+        await selectContextForPrompt(messages);
         const outbound = await withOptionalWebSearch(
           model,
           messages,

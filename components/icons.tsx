@@ -89,6 +89,14 @@ export function CheckIcon(props: IconProps) {
   );
 }
 
+export function FolderIcon(props: IconProps) {
+  return (
+    <svg {...icon(props)}>
+      <path d="M4 8.2A1.7 1.7 0 0 1 5.7 6.5h4.1L12 8.5h6.3A1.7 1.7 0 0 1 20 10.2v7.3A1.7 1.7 0 0 1 18.3 19.2H5.7A1.7 1.7 0 0 1 4 17.5V8.2z" />
+    </svg>
+  );
+}
+
 export function SettingsIcon(props: IconProps) {
   return (
     <svg {...icon(props)}>

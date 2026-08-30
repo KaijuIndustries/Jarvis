@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { ChatPane } from "./ChatPane";
 import { Composer } from "./Composer";
+import { ContextView } from "./ContextView";
+import { KnowledgeView } from "./KnowledgeView";
 import { ModelSelector } from "./ModelSelector";
 import { SettingsPanel } from "./SettingsPanel";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, type ShellView } from "./Sidebar";
 import { StatusIndicator } from "./StatusIndicator";
 import { SidebarIcon } from "./icons";
 import { useJarvis } from "./jarvis-provider";
@@ -13,20 +15,29 @@ import { useJarvis } from "./jarvis-provider";
 export function AppShell() {
   const jarvis = useJarvis();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [view, setView] = useState<ShellView>("chat");
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
       <Sidebar
         conversations={jarvis.conversations}
-        activeId={jarvis.activeConversation?.id ?? null}
+        activeId={view === "chat" ? jarvis.activeConversation?.id ?? null : null}
         collapsed={jarvis.sidebarCollapsed}
         mobileOpen={jarvis.mobileSidebarOpen}
-        onNew={jarvis.newConversation}
+        onNew={() => {
+          setView("chat");
+          jarvis.newConversation();
+        }}
         onSelect={jarvis.selectConversation}
         onDelete={jarvis.deleteConversation}
         onToggleCollapsed={jarvis.toggleSidebarCollapsed}
         onCloseMobile={() => jarvis.setMobileSidebarOpen(false)}
         onOpenSettings={() => setSettingsOpen(true)}
+        view={view}
+        onChangeView={(next) => {
+          setView(next);
+          jarvis.setMobileSidebarOpen(false);
+        }}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -39,13 +50,19 @@ export function AppShell() {
           >
             <SidebarIcon className="h-4 w-4" />
           </button>
-          <ModelSelector
-            models={jarvis.models}
-            selectedModel={jarvis.selectedModel}
-            disabled={!jarvis.health.ok}
-            onSelect={jarvis.selectModel}
-            onOpen={() => void jarvis.refreshModels()}
-          />
+          {view === "chat" ? (
+            <ModelSelector
+              models={jarvis.models}
+              selectedModel={jarvis.selectedModel}
+              disabled={!jarvis.health.ok}
+              onSelect={jarvis.selectModel}
+              onOpen={() => void jarvis.refreshModels()}
+            />
+          ) : (
+            <p className="text-[13px] font-medium">
+              {view === "context" ? "Context" : "Knowledge"}
+            </p>
+          )}
           <div className="ml-auto min-w-0">
             <StatusIndicator
               connected={jarvis.health.ok}
@@ -55,29 +72,36 @@ export function AppShell() {
           </div>
         </header>
 
-        <ChatPane
-          conversation={jarvis.activeConversation}
-          streaming={jarvis.streaming}
-          ollamaOk={jarvis.health.ok}
-          checking={jarvis.checkingHealth}
-          hasModels={jarvis.models.length > 0}
-          onCopy={(content) => void navigator.clipboard.writeText(content)}
-          onRegenerate={() => void jarvis.regenerate()}
-        />
-
-        <Composer
-          disabled={!jarvis.health.ok || !jarvis.selectedModel}
-          streaming={jarvis.streaming}
-          placeholder={
-            !jarvis.health.ok
-              ? "Ollama is unavailable"
-              : !jarvis.selectedModel
-                ? "Select a model to chat"
-                : "Message Jarvis"
-          }
-          onSend={(value) => void jarvis.sendMessage(value)}
-          onStop={jarvis.stop}
-        />
+        {view === "chat" ? (
+          <>
+            <ChatPane
+              conversation={jarvis.activeConversation}
+              streaming={jarvis.streaming}
+              ollamaOk={jarvis.health.ok}
+              checking={jarvis.checkingHealth}
+              hasModels={jarvis.models.length > 0}
+              onCopy={(content) => void navigator.clipboard.writeText(content)}
+              onRegenerate={() => void jarvis.regenerate()}
+            />
+            <Composer
+              disabled={!jarvis.health.ok || !jarvis.selectedModel}
+              streaming={jarvis.streaming}
+              placeholder={
+                !jarvis.health.ok
+                  ? "Ollama is unavailable"
+                  : !jarvis.selectedModel
+                    ? "Select a model to chat"
+                    : "Message Jarvis"
+              }
+              onSend={(value) => void jarvis.sendMessage(value)}
+              onStop={jarvis.stop}
+            />
+          </>
+        ) : view === "context" ? (
+          <ContextView />
+        ) : (
+          <KnowledgeView />
+        )}
       </div>
 
       {settingsOpen ? (

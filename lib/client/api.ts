@@ -115,6 +115,112 @@ export async function saveOllamaApiKey(
   return data;
 }
 
+export type ContextCategory = "user" | "assistant" | "preference" | "other";
+
+export type ContextItem = {
+  id: string;
+  key: string;
+  value: string;
+  category: ContextCategory;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type KnowledgeDocument = {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+async function readApiError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: string };
+    return body.error ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function fetchContextItems(): Promise<ContextItem[]> {
+  const response = await fetch("/api/context", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to load context"));
+  }
+  const data = (await response.json()) as { items?: ContextItem[] };
+  return data.items ?? [];
+}
+
+export async function createContextItem(input: {
+  key: string;
+  value: string;
+  category: ContextCategory;
+}): Promise<ContextItem> {
+  const response = await fetch("/api/context", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to add context"));
+  }
+  const data = (await response.json()) as { item: ContextItem };
+  return data.item;
+}
+
+export async function updateContextItem(
+  id: string,
+  input: { key: string; value: string; category: ContextCategory },
+): Promise<ContextItem> {
+  const response = await fetch(`/api/context/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to update context"));
+  }
+  const data = (await response.json()) as { item: ContextItem };
+  return data.item;
+}
+
+export async function deleteContextItem(id: string): Promise<void> {
+  const response = await fetch(`/api/context/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to delete context"));
+  }
+}
+
+export async function fetchDocuments(): Promise<KnowledgeDocument[]> {
+  const response = await fetch("/api/documents", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to load documents"));
+  }
+  const data = (await response.json()) as { documents?: KnowledgeDocument[] };
+  return data.documents ?? [];
+}
+
+export async function uploadDocument(file: File): Promise<KnowledgeDocument> {
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch("/api/documents", { method: "POST", body });
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to upload document"));
+  }
+  const data = (await response.json()) as { document: KnowledgeDocument };
+  return data.document;
+}
+
+export async function deleteDocument(id: string): Promise<void> {
+  const response = await fetch(`/api/documents/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to delete document"));
+  }
+}
+
 export async function clearOllamaApiKey(): Promise<OllamaSettingsStatus> {
   const response = await fetch("/api/settings/ollama", { method: "DELETE" });
   if (!response.ok) {

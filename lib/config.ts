@@ -9,6 +9,7 @@ function readEnv(name: string, fallback: string): string {
 }
 
 export const serverConfig = {
+  databaseUrl: process.env.DATABASE_URL?.trim() ?? "",
   ollamaBaseUrl: readEnv("OLLAMA_BASE_URL", "http://localhost:11434"),
   /**
    * Ollama's hosted web search API (not the local inference server).
