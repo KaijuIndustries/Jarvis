@@ -1,4 +1,14 @@
-import type { ChatMessage, ChatStreamChunk, ModelInfo, ProviderHealth } from "@/lib/ai";
+import type {
+  ChatMessage,
+  ChatStreamChunk,
+  ModelInfo,
+  ProviderHealth,
+} from "@/lib/ai";
+
+export type OllamaSettingsStatus = {
+  configured: boolean;
+  source: "environment" | "server" | null;
+};
 
 export async function fetchModels(): Promise<{
   models: ModelInfo[];
@@ -78,4 +88,37 @@ export async function streamChat(params: {
       params.onChunk(payload);
     }
   }
+}
+
+export async function fetchOllamaSettings(): Promise<OllamaSettingsStatus> {
+  const response = await fetch("/api/settings/ollama", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Failed to load settings");
+  }
+  return (await response.json()) as OllamaSettingsStatus;
+}
+
+export async function saveOllamaApiKey(
+  apiKey: string,
+): Promise<OllamaSettingsStatus> {
+  const response = await fetch("/api/settings/ollama", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apiKey }),
+  });
+  const data = (await response.json()) as OllamaSettingsStatus & {
+    error?: string;
+  };
+  if (!response.ok) {
+    throw new Error(data.error ?? "Failed to save API key");
+  }
+  return data;
+}
+
+export async function clearOllamaApiKey(): Promise<OllamaSettingsStatus> {
+  const response = await fetch("/api/settings/ollama", { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error("Failed to clear API key");
+  }
+  return (await response.json()) as OllamaSettingsStatus;
 }

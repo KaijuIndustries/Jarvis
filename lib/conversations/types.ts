@@ -6,6 +6,7 @@ export type ConversationMessage = {
   content: string;
   createdAt: number;
   error?: string;
+  toolStatus?: string;
 };
 
 export type Conversation = {

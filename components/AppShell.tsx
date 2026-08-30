@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { ChatPane } from "./ChatPane";
 import { Composer } from "./Composer";
 import { ModelSelector } from "./ModelSelector";
+import { SettingsPanel } from "./SettingsPanel";
 import { Sidebar } from "./Sidebar";
 import { StatusIndicator } from "./StatusIndicator";
 import { SidebarIcon } from "./icons";
@@ -10,6 +12,7 @@ import { useJarvis } from "./jarvis-provider";
 
 export function AppShell() {
   const jarvis = useJarvis();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
@@ -23,6 +26,7 @@ export function AppShell() {
         onDelete={jarvis.deleteConversation}
         onToggleCollapsed={jarvis.toggleSidebarCollapsed}
         onCloseMobile={() => jarvis.setMobileSidebarOpen(false)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -75,6 +79,10 @@ export function AppShell() {
           onStop={jarvis.stop}
         />
       </div>
+
+      {settingsOpen ? (
+        <SettingsPanel onClose={() => setSettingsOpen(false)} />
+      ) : null}
     </div>
   );
 }

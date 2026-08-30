@@ -21,9 +21,16 @@ export type ProviderHealth = {
   error?: string;
 };
 
+export type ToolEvent = {
+  name: string;
+  status: "started" | "done" | "error";
+  message?: string;
+};
+
 export type ChatStreamChunk = {
   content: string;
   done: boolean;
+  tool?: ToolEvent;
 };
 
 export type ChatStreamParams = {

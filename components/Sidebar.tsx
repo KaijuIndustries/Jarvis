@@ -2,7 +2,7 @@
 
 import type { Conversation } from "@/lib/conversations/types";
 import { formatRelativeTime } from "@/lib/format";
-import { MarkIcon, PlusIcon, SidebarIcon, TrashIcon } from "./icons";
+import { MarkIcon, PlusIcon, SettingsIcon, SidebarIcon, TrashIcon } from "./icons";
 
 type SidebarProps = {
   conversations: Conversation[];
@@ -14,6 +14,7 @@ type SidebarProps = {
   onDelete: (id: string) => void;
   onToggleCollapsed: () => void;
   onCloseMobile: () => void;
+  onOpenSettings: () => void;
 };
 
 export function Sidebar({
@@ -26,6 +27,7 @@ export function Sidebar({
   onDelete,
   onToggleCollapsed,
   onCloseMobile,
+  onOpenSettings,
 }: SidebarProps) {
   return (
     <>
@@ -123,6 +125,19 @@ export function Sidebar({
         ) : (
           <div className="flex-1" />
         )}
+
+        <div className="border-t border-border p-2">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-muted hover:bg-surface-2 hover:text-foreground ${
+              collapsed ? "justify-center px-0" : ""
+            }`}
+          >
+            <SettingsIcon className="h-4 w-4 shrink-0" />
+            {!collapsed ? <span>Settings</span> : null}
+          </button>
+        </div>
       </aside>
     </>
   );

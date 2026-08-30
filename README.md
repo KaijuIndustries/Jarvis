@@ -142,12 +142,17 @@ Restart Jarvis after changing the value. No code changes are required.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama HTTP API base URL |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama inference API |
+| `OLLAMA_API_KEY` | unset | Ollama web search key (server-side only; can also be saved in Settings) |
+| `OLLAMA_WEB_SEARCH_URL` | `https://ollama.com/api/web_search` | Hosted web search endpoint |
+| `WEB_SEARCH_MODELS` | `*` | Models allowed to use web search (`*` or comma-separated IDs) |
 | `ALLOWED_DEV_ORIGINS` | unset | Extra hostnames allowed to use `next dev` from the LAN |
 
 Copy `.env.example` to `.env` or `.env.local`. Secrets and hostnames stay in environment variables; nothing is hard-coded.
 
-There is no telemetry. Prompts and conversations are sent only to the configured Ollama URL.
+There is no telemetry. Chat goes to the configured local Ollama URL. If web search runs, the query and your server-side API key go to Ollama's hosted search API only — never through the browser.
+
+Restrict search per model with `WEB_SEARCH_MODELS`. Example: `WEB_SEARCH_MODELS=llama3.2,qwen3`.
 
 ## Usage
 
@@ -165,11 +170,14 @@ app/                 Next.js App Router (UI + API routes)
   api/chat/          Streaming chat (SSE)
   api/models/        Live Ollama model list
   api/health/        Ollama connectivity
+  api/settings/      Server-side Ollama API key status/save/clear
 components/          Chat UI
 lib/
-  ai/                Provider interface, Ollama adapter, router
+  ai/                Provider interface, Ollama adapter, web search client
+  tools/             Tool registry (web_search first; others later)
   client/            Browser calls to the Jarvis API
   conversations/     localStorage persistence (swap-ready for a database)
+  secrets.ts         Server-only API key store
   config.ts          Environment configuration
 ```
 
@@ -194,4 +202,4 @@ This layout is compatible with later containerisation: configuration is via envi
 
 ## What this version does not include
 
-Routing between multiple models/GPUs, tool calling, voice, long-term memory, and Home Assistant are intentionally out of scope. The provider/router split is the extension point for those later.
+Routing between multiple models/GPUs, ComfyUI, voice, long-term memory, and Home Assistant are intentionally out of scope. Web search is an optional backend tool, not a full agent loop.

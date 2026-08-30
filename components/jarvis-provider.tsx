@@ -219,6 +219,24 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
           messages: toProviderMessages(history),
           signal: controller.signal,
           onChunk: (chunk) => {
+            if (chunk.tool) {
+              const toolStatus =
+                chunk.tool.status === "started"
+                  ? "Searching the web…"
+                  : chunk.tool.status === "done"
+                    ? "Used web search"
+                    : chunk.tool.message ?? "Web search unavailable";
+              patchConversation(conversationId, (conversation) => ({
+                ...conversation,
+                updatedAt: Date.now(),
+                messages: conversation.messages.map((message) =>
+                  message.id === assistant.id
+                    ? { ...message, toolStatus }
+                    : message,
+                ),
+              }));
+              return;
+            }
             if (!chunk.content) return;
             patchConversation(conversationId, (conversation) => ({
               ...conversation,

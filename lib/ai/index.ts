@@ -7,4 +7,5 @@ export type {
   ChatStreamParams,
   ModelInfo,
   ProviderHealth,
+  ToolEvent,
 } from "./types";

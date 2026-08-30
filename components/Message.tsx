@@ -80,6 +80,9 @@ export function Message({
             </p>
           ) : (
             <>
+              {message.toolStatus ? (
+                <p className="mb-2 text-[12px] text-muted">{message.toolStatus}</p>
+              ) : null}
               {message.content ? (
                 <MarkdownContent content={message.content} />
               ) : streaming ? (

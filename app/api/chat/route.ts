@@ -1,4 +1,7 @@
 import { getAIProvider, type ChatMessage } from "@/lib/ai";
+import { queryNeedsWebSearch } from "@/lib/tools/needs-search";
+import { modelHasTool } from "@/lib/tools/access";
+import { runTool } from "@/lib/tools/registry";
 
 export const runtime = "nodejs";
 
@@ -16,6 +19,58 @@ function isChatMessage(value: unknown): value is ChatMessage {
       message.role === "assistant") &&
     typeof message.content === "string"
   );
+}
+
+async function withOptionalWebSearch(
+  model: string,
+  messages: ChatMessage[],
+  signal: AbortSignal,
+  send: (payload: unknown) => void,
+): Promise<ChatMessage[]> {
+  const lastUser = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (!lastUser) return messages;
+  if (!modelHasTool(model, "web_search")) return messages;
+  if (!queryNeedsWebSearch(lastUser.content)) return messages;
+
+  send({
+    content: "",
+    done: false,
+    tool: { name: "web_search", status: "started" },
+  });
+
+  const result = await runTool(
+    "web_search",
+    { query: lastUser.content },
+    { model, signal },
+  );
+
+  if (!result.ok) {
+    send({
+      content: "",
+      done: false,
+      tool: {
+        name: "web_search",
+        status: "error",
+        message: result.error ?? "Web search unavailable",
+      },
+    });
+    return messages;
+  }
+
+  send({
+    content: "",
+    done: false,
+    tool: { name: "web_search", status: "done" },
+  });
+
+  const lastUserIndex = messages.lastIndexOf(lastUser);
+  return [
+    ...messages.slice(0, lastUserIndex),
+    { role: "system", content: result.content },
+    ...messages.slice(lastUserIndex),
+  ];
 }
 
 export async function POST(request: Request) {
@@ -50,9 +105,15 @@ export async function POST(request: Request) {
       };
 
       try {
-        for await (const chunk of provider.chatStream({
+        const outbound = await withOptionalWebSearch(
           model,
           messages,
+          request.signal,
+          send,
+        );
+        for await (const chunk of provider.chatStream({
+          model,
+          messages: outbound,
           signal: request.signal,
         })) {
           send(chunk);
