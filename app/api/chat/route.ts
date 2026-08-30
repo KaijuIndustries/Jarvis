@@ -1,4 +1,8 @@
 import { getAIProvider, type ChatMessage } from "@/lib/ai";
+import {
+  formatServerDateTime,
+  queryNeedsServerTime,
+} from "@/lib/ai/server-time";
 import { formatContextForPrompt } from "@/lib/context/prompt";
 import { selectContextForPrompt } from "@/lib/context/service";
 import { queryNeedsWebSearch } from "@/lib/tools/needs-search";
@@ -109,12 +113,22 @@ export async function POST(request: Request) {
       try {
         const contextItems = await selectContextForPrompt(messages);
         const contextBlock = formatContextForPrompt(contextItems);
+        const lastUser = [...messages]
+          .reverse()
+          .find((message) => message.role === "user");
+        const timeBlock =
+          lastUser && queryNeedsServerTime(lastUser.content)
+            ? formatServerDateTime()
+            : null;
         const withContext = contextBlock
           ? [{ role: "system" as const, content: contextBlock }, ...messages]
           : messages;
+        const withClock = timeBlock
+          ? [{ role: "system" as const, content: timeBlock }, ...withContext]
+          : withContext;
         const outbound = await withOptionalWebSearch(
           model,
-          withContext,
+          withClock,
           request.signal,
           send,
         );

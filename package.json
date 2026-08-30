@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start --hostname 0.0.0.0 --port 3000",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test lib/context/prompt.test.ts",
+    "test": "node --experimental-strip-types --test lib/context/prompt.test.ts lib/ai/server-time.test.ts",
     "migrate": "node scripts/migrate.mjs",
     "migrate:status": "node scripts/migrate.mjs --status",
     "db:migrate": "node scripts/migrate.mjs",

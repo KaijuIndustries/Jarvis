@@ -165,7 +165,7 @@ Restrict search per model with `WEB_SEARCH_MODELS`. Example: `WEB_SEARCH_MODELS=
 6. Use the sidebar for conversation history. History is stored in the browser (`localStorage`) for this version.
 7. Open **Directory → Context** to add persistent facts, or **Knowledge** to upload documents.
 
-Facts stored in Context are read on each chat request and sent to Ollama as a trusted system message. Chat never writes context automatically. Knowledge documents are stored only; RAG is not implemented yet.
+Facts stored in Context are read on each chat request and sent to Ollama as a trusted system message. Chat never writes context automatically. Knowledge documents are stored only; RAG is not implemented yet. Date and time questions receive the Jarvis host clock (the Node process timezone).
 
 ## Project structure
 
