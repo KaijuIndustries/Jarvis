@@ -2,7 +2,6 @@
 
 import type { Conversation } from "@/lib/conversations/types";
 import { Message } from "./Message";
-import { MarkIcon } from "./icons";
 import { useEffect, useRef } from "react";
 
 type ChatPaneProps = {
@@ -37,9 +36,8 @@ export function ChatPane({
 
   if (!messages || messages.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center px-6">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6">
         <div className="max-w-md text-center">
-          <MarkIcon className="mx-auto mb-4 h-10 w-10 text-accent" />
           <h1 className="text-lg font-medium tracking-tight">Ready when you are</h1>
           <p className="mt-2 text-sm leading-6 text-muted">
             {checking
@@ -56,7 +54,7 @@ export function ChatPane({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="divide-y divide-border/60">
         {messages.map((message) => (
           <Message

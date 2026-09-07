@@ -157,7 +157,7 @@ Restrict search per model with `WEB_SEARCH_MODELS`. Example: `WEB_SEARCH_MODELS=
 
 ## Usage
 
-1. Open Jarvis in a browser.
+1. Open Jarvis in a browser. Chat is `/`. A dedicated Orb display is `/orb` (Ctrl+Shift+O toggles).
 2. Confirm the status indicator shows Ollama connected.
 3. Select a model.
 4. Send a message.
