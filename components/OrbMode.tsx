@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { JarvisOrb } from "@/components/orb";
 import { useMicrophoneAnalyser } from "@/hooks/useMicrophoneAnalyser";
 import { useMicrophoneSession } from "@/hooks/useMicrophoneSession";
+import { useOrbChat } from "@/hooks/useOrbChat";
 import { useVoiceCapture } from "@/hooks/useVoiceCapture";
 import { fetchHealth } from "@/lib/client/api";
 import { resolveOrbState } from "./resolveOrbState";
@@ -24,14 +25,19 @@ export function OrbMode() {
   const session = useMicrophoneSession();
   const mic = useMicrophoneAnalyser(session);
   const voice = useVoiceCapture(session);
+  const chat = useOrbChat({
+    transcript: voice.transcript,
+    recording: voice.recording,
+    transcribing: voice.transcribing,
+  });
 
   const state = resolveOrbState({
-    streaming: false,
+    streaming: chat.streaming,
     healthOk,
     checkingHealth,
     recording: voice.recording,
     transcribing: voice.transcribing,
-    voiceError: Boolean(session.error || voice.error),
+    voiceError: Boolean(session.error || voice.error || chat.error),
   });
 
   useEffect(() => {
@@ -52,17 +58,24 @@ export function OrbMode() {
     };
   }, []);
 
+  const statusError = session.error || voice.error || chat.error;
   const statusText = session.error
     ? session.error
     : voice.error
       ? voice.error
-      : voice.transcribing
-        ? "Transcribing..."
-        : voice.recording
-          ? "Listening..."
-          : voice.transcript === ""
-            ? "I didn't hear anything."
-            : voice.transcript;
+      : chat.error
+        ? chat.error
+        : voice.transcribing
+          ? "Transcribing..."
+          : voice.recording
+            ? "Listening..."
+            : chat.streaming
+              ? chat.reply || "Thinking..."
+              : chat.reply
+                ? chat.reply
+                : voice.transcript === ""
+                  ? "I didn't hear anything."
+                  : voice.transcript;
 
   return (
     <div className="fixed inset-0 h-dvh w-dvw overflow-hidden bg-[#05060a]">
@@ -85,7 +98,7 @@ export function OrbMode() {
             ) : (
               <button
                 type="button"
-                disabled={voice.transcribing}
+                disabled={voice.transcribing || chat.streaming}
                 onClick={() => {
                   if (voice.recording) void voice.stop();
                   else void voice.start();
@@ -98,11 +111,13 @@ export function OrbMode() {
             {statusText ? (
               <p
                 className={
-                  session.error || voice.error
+                  statusError
                     ? "text-[12px] text-[#c47c6e]"
-                    : voice.transcript && !voice.recording && !voice.transcribing
+                    : chat.reply && !voice.recording && !voice.transcribing
                       ? "text-[12px] text-white/70"
-                      : "text-[11px] tracking-wide text-white/35"
+                      : voice.transcript && !voice.recording && !voice.transcribing
+                        ? "text-[12px] text-white/70"
+                        : "text-[11px] tracking-wide text-white/35"
                 }
               >
                 {statusText}
