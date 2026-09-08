@@ -17,7 +17,9 @@ export const ORB_STATE_INDEX: Record<OrbState, number> = {
  * without triggering React renders.
  */
 export type OrbUniforms = {
-  time: number;
+  phaseSlow: number;
+  phaseMain: number;
+  phaseQuick: number;
   rawLevel: number;
   rawBass: number;
   rawMids: number;
@@ -59,6 +61,10 @@ export type OrbUniforms = {
   prevLevel: number;
   breathe: number;
   breatheVel: number;
+  listenTint: number;
+  speakTint: number;
+  thinkTint: number;
+  lastState: number;
 };
 
 /**
@@ -80,7 +86,9 @@ export function ensureOrbUniforms(target: OrbUniforms) {
 
 export function createOrbUniforms(): OrbUniforms {
   return {
-    time: 0,
+    phaseSlow: 0,
+    phaseMain: 0,
+    phaseQuick: 0,
     rawLevel: 0,
     rawBass: 0,
     rawMids: 0,
@@ -122,6 +130,10 @@ export function createOrbUniforms(): OrbUniforms {
     prevLevel: 0,
     breathe: 0,
     breatheVel: 0,
+    listenTint: 0,
+    speakTint: 0,
+    thinkTint: 0,
+    lastState: 0,
   };
 }
 
@@ -156,7 +168,7 @@ export function syncOrbUniforms(target: OrbUniforms, props: OrbUniformInputs) {
  * looks like working animation while doing nothing at all.
  */
 type ShaderBag = {
-  uTime?: { value: number };
+  uPhase?: { value: { x: number; y: number; z: number } };
   uAudioLevel?: { value: number };
   uBass?: { value: number };
   uMids?: { value: number };
@@ -176,10 +188,18 @@ type ShaderBag = {
   uWaveAmp?: { value: number };
   uFlow?: { value: number };
   uSize?: { value: number };
+  uListen?: { value: number };
+  uSpeak?: { value: number };
+  uThink?: { value: number };
 };
 
 export function writeLayerUniforms(bag: ShaderBag, src: OrbUniforms) {
-  if (bag.uTime) bag.uTime.value = src.time;
+  if (bag.uPhase) {
+    bag.uPhase.value.x = src.phaseSlow;
+    bag.uPhase.value.y = src.phaseMain;
+    bag.uPhase.value.z = src.phaseQuick;
+  }
+  if (bag.uWavePhase) bag.uWavePhase.value = src.wavePhase;
   if (bag.uAudioLevel) bag.uAudioLevel.value = src.audioLevel;
   if (bag.uBass) bag.uBass.value = src.bass;
   if (bag.uMids) bag.uMids.value = src.mids;
@@ -197,10 +217,12 @@ export function writeLayerUniforms(bag: ShaderBag, src: OrbUniforms) {
   if (bag.uCoreDrive) bag.uCoreDrive.value = src.coreDrive;
   if (bag.uTurbulence) bag.uTurbulence.value = src.turbulence;
   if (bag.uSpark) bag.uSpark.value = src.spark;
-  if (bag.uWavePhase) bag.uWavePhase.value = src.wavePhase;
   if (bag.uWaveAmp) bag.uWaveAmp.value = src.waveAmp;
   if (bag.uFlow) bag.uFlow.value = src.flow;
   if (bag.uSize) bag.uSize.value = src.breathe;
+  if (bag.uListen) bag.uListen.value = src.listenTint;
+  if (bag.uSpeak) bag.uSpeak.value = src.speakTint;
+  if (bag.uThink) bag.uThink.value = src.thinkTint;
 }
 
 export const OrbUniformsContext =

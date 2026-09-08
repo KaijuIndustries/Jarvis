@@ -26,32 +26,32 @@ const PROFILES: StateProfile[] = [
   },
   // listening — surface is hungry, not larger
   {
-    swirl: 1.35,
-    distortGain: 1.5,
-    audioGain: 1.15,
-    particleGain: 1.35,
-    flareGain: 1.75,
-    jitter: 0.01,
+    swirl: 1.16,
+    distortGain: 1.18,
+    audioGain: 1.05,
+    particleGain: 1.12,
+    flareGain: 1.28,
+    jitter: 0.004,
     pulseBase: 0,
   },
-  // thinking — internal circulation, ignore the mic
+  // thinking — same body as idle; no colour shift
   {
-    swirl: 2.35,
-    distortGain: 1.12,
-    audioGain: 0.12,
-    particleGain: 1.18,
-    flareGain: 0.8,
+    swirl: 1.05,
+    distortGain: 1,
+    audioGain: 0.22,
+    particleGain: 1,
+    flareGain: 1.05,
     jitter: 0,
     pulseBase: 0,
   },
-  // speaking — voice sculpts energy, not size
+  // speaking — same body as idle; colour carries the state
   {
-    swirl: 1.42,
-    distortGain: 1.28,
-    audioGain: 1.3,
-    particleGain: 1.22,
-    flareGain: 1.5,
-    jitter: 0.008,
+    swirl: 1.08,
+    distortGain: 1,
+    audioGain: 0.22,
+    particleGain: 1,
+    flareGain: 1.05,
+    jitter: 0,
     pulseBase: 0,
   },
   // error — unstable, tasteful

@@ -6,7 +6,7 @@
 //   2. Pass world-space positions to the fragment shader so it
 //      can walk a ray through the volume (not just paint the skin).
 
-uniform float uTime;
+uniform vec3 uPhase;
 uniform float uDistortion;
 uniform float uIntensity;
 uniform float uJitter;
@@ -47,9 +47,11 @@ float valueNoise(vec3 x) {
 void main() {
   // Two slow noise samples at different scales. Added together they
   // stop the silhouette from pulsing as a single obvious sine wave.
-  float n1 = valueNoise(position * 2.15 + vec3(uTime * 0.23, 0.4, uTime * 0.11));
-  float n2 = valueNoise(position * 3.6 + vec3(uTime * -0.17, uTime * 0.21, 0.8));
-  float n3 = valueNoise(position * 1.4 + vec3(0.6, uTime * 0.14, uTime * -0.19));
+  vec2 loop = vec2(cos(uPhase.y), sin(uPhase.y));
+  vec2 slow = vec2(cos(uPhase.x), sin(uPhase.x));
+  float n1 = valueNoise(position * 2.15 + vec3(loop.x * 0.4, 0.4, loop.y * 0.3));
+  float n2 = valueNoise(position * 3.6 + vec3(slow.y * 0.35, loop.x * 0.4, 0.8));
+  float n3 = valueNoise(position * 1.4 + vec3(0.6, slow.x * 0.3, loop.y * -0.35));
   float displace = (n1 * 0.5 + n2 * 0.3 + n3 * 0.2) - 0.5;
 
   float amp = 0.045 + uDistortion * 0.05 + uCoreDrive * 0.035 + uJitter * 0.25;

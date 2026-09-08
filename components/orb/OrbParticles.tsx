@@ -29,15 +29,23 @@ function seed(i: number, salt: number) {
 type Mote = {
   radius: number;
   speed: number;
-  phase: number;
+  angle: number;
   ecc: number;
   size: number;
   flareRate: number;
-  flareOffset: number;
+  flarePhase: number;
   // Orthonormal basis for a unique orbit plane.
   bx: [number, number, number];
   by: [number, number, number];
 };
+
+const TAU = Math.PI * 2;
+const ORBIT_SCALE = 0.24;
+
+function wrapTau(phase: number) {
+  const wrapped = phase % TAU;
+  return wrapped < 0 ? wrapped + TAU : wrapped;
+}
 
 function createMotes(): Mote[] {
   const motes: Mote[] = [];
@@ -69,11 +77,11 @@ function createMotes(): Mote[] {
       // A few close to the field, most in a loose outer band.
       radius: 1.08 + seed(i, 3) * 0.95,
       speed: 0.017 + seed(i, 4) * 0.029,
-      phase: seed(i, 5) * Math.PI * 2,
+      angle: seed(i, 5) * Math.PI * 2,
       ecc: 0.04 + seed(i, 6) * 0.1,
       size: 7 + seed(i, 7) * 6,
       flareRate: 0.075 + seed(i, 8) * 0.12,
-      flareOffset: seed(i, 9) * Math.PI * 2,
+      flarePhase: seed(i, 9) * Math.PI * 2,
       bx: [bx0, bx1, bx2],
       by: [by0, by1, by2],
     });
@@ -110,11 +118,13 @@ export function OrbParticles() {
       uAudioLevel: { value: 0 },
       uPulse: { value: 0 },
       uSpark: { value: 0 },
+      uListen: { value: 0 },
+      uSpeak: { value: 0 },
     }),
     [],
   );
 
-  useFrame(({ gl }) => {
+  useFrame(({ gl }, delta) => {
     // ShaderMaterial clones its constructor uniforms, so the prop object
     // is a detached copy. Only writes through the material are rendered.
     const live = matRef.current?.uniforms;
@@ -123,20 +133,39 @@ export function OrbParticles() {
     const src = store.current;
     live.uPixelRatio.value = Math.min(gl.getPixelRatio(), 1.75);
     live.uIntensity.value = src.intensity;
+    live.uListen.value = src.listenTint;
+    live.uSpeak.value = src.speakTint;
 
-    const t = src.time;
+    if (src.paused > 0.5) return;
+    if (typeof document !== "undefined" && document.hidden) return;
+    const step = Math.min(Math.max(delta, 0), 0.05);
+    const listen = src.listenTint;
+    const speak = src.speakTint;
 
     for (let i = 0; i < COUNT; i += 1) {
       const mote = motes[i];
-      const angle = mote.phase + t * mote.speed;
-      const wave = Math.sin(t * mote.flareRate + mote.flareOffset);
-      const flare = Math.min(1, Math.pow(Math.max(wave, 0), 10));
+      mote.angle = wrapTau(mote.angle + mote.speed * ORBIT_SCALE * step);
+      mote.flarePhase = wrapTau(
+        mote.flarePhase + mote.flareRate * ORBIT_SCALE * step,
+      );
+      const wave = Math.sin(mote.flarePhase);
+      const rest = Math.min(1, Math.pow(Math.max(wave, 0), 10));
+      // Speak: a ring of brightness walks the swarm. Listen: a steady
+      // inner glow. Neither writes the core springs.
+      const stagger = 0.5 + 0.5 * Math.sin(src.phaseMain * 2 + mote.flarePhase);
+      const flare = Math.min(
+        1,
+        rest + speak * 0.48 * stagger * stagger + listen * 0.2,
+      );
       flares[i] = flare;
 
+      const inward = listen * 0.12 * (0.55 + 0.45 * Math.sin(mote.flarePhase));
+      const radial = 1 - inward + speak * 0.12;
       const pull = 1 - flare * 0.16;
-      const r = mote.radius * (1 + mote.ecc * Math.cos(angle)) * pull;
-      const x = r * Math.cos(angle);
-      const y = r * Math.sin(angle);
+      const r =
+        mote.radius * (1 + mote.ecc * Math.cos(mote.angle)) * pull * radial;
+      const x = r * Math.cos(mote.angle);
+      const y = r * Math.sin(mote.angle);
 
       positions[i * 3] = mote.bx[0] * x + mote.by[0] * y;
       positions[i * 3 + 1] = mote.bx[1] * x + mote.by[1] * y;

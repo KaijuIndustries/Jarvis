@@ -5,6 +5,8 @@
 
 uniform float uIntensity;
 uniform float uPulse;
+uniform float uListen;
+uniform float uSpeak;
 
 varying float vFlare;
 
@@ -17,8 +19,10 @@ void main() {
   float halo = exp(-d * d * 1.7) * 0.28;
   float spark = (hot + halo) * (0.32 + vFlare * 0.85 + uPulse * 0.1);
 
-  vec3 amber = vec3(0.80, 0.54, 0.28);
-  vec3 ivory = vec3(0.98, 0.92, 0.78);
+  vec3 amber = mix(vec3(0.80, 0.54, 0.28), vec3(0.30, 0.74, 0.42), uListen);
+  amber = mix(amber, vec3(0.18, 0.42, 0.98), uSpeak);
+  vec3 ivory = mix(vec3(0.98, 0.92, 0.78), vec3(0.84, 0.98, 0.88), uListen);
+  ivory = mix(ivory, vec3(0.48, 0.72, 1.0), uSpeak);
   vec3 col = mix(amber, ivory, hot * (0.35 + vFlare * 0.5));
 
   gl_FragColor = vec4(col * spark * uIntensity, 1.0);

@@ -2,7 +2,7 @@
 
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
-import { AdditiveBlending, type ShaderMaterial } from "three";
+import { AdditiveBlending, Vector3, type ShaderMaterial } from "three";
 import coreFrag from "./shaders/core.frag.glsl";
 import coreVert from "./shaders/core.vert.glsl";
 import { useOrbUniforms, writeLayerUniforms } from "./uniforms";
@@ -14,10 +14,10 @@ const CORE_RADIUS = 0.48;
  * uniform part of the growth; the shader adds a directional swell on top,
  * so this stays modest to keep the two from compounding into a zoom.
  */
-const MAX_SWELL = 0.35;
+const MAX_SWELL = 0.16;
 /** Sprung size channel range, including spring overshoot. */
-const MAX_SIZE = 1.2;
-const MIN_SIZE = -0.4;
+const MAX_SIZE = 0.35;
+const MIN_SIZE = -0.12;
 
 /** Must match MARCH_PAD in core.frag.glsl. */
 const MARCH_PAD = 1.32;
@@ -43,7 +43,7 @@ export function OrbCore() {
   // Initial values only. The live values live on the material.
   const initialUniforms = useMemo(
     () => ({
-      uTime: { value: 0 },
+      uPhase: { value: new Vector3() },
       uState: { value: 0 },
       uIntensity: { value: 1 },
       uDistortion: { value: 0.35 },
@@ -55,6 +55,8 @@ export function OrbCore() {
       uSpark: { value: 0 },
       uFlow: { value: 1 },
       uSize: { value: 0 },
+      uListen: { value: 0 },
+      uSpeak: { value: 0 },
     }),
     [],
   );

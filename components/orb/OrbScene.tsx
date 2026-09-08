@@ -4,21 +4,14 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import type { MutableRefObject } from "react";
 import { OrbBloom } from "./OrbBloom";
 import { OrbCore } from "./OrbCore";
-import { tickEnergy } from "./energy";
+import { advanceLoop, tickEnergy } from "./energy";
+import { OrbHalo } from "./OrbHalo";
 import { OrbParticles } from "./OrbParticles";
+import { OrbSatellites } from "./OrbSatellites";
 import type { OrbAudioSource } from "./types";
 import { OrbUniformsContext, useOrbUniforms, type OrbUniforms } from "./uniforms";
 
 const VOID = "#05060a";
-
-/**
- * Speed of every procedural motion. All continuous animation is driven
- * from store.time, so this scales core circulation, flow drift, idle
- * breathing and particle orbits together. Spring and attack/release
- * response stays on real time so reactions to state and audio keep
- * their weight instead of turning mushy.
- */
-const TIME_SCALE = 0.24;
 
 type OrbSceneProps = {
   uniforms: MutableRefObject<OrbUniforms>;
@@ -42,8 +35,10 @@ function ClockDriver({
       store.rawTreble = live.treble;
     }
     if (store.paused > 0.5) return;
-    store.time += delta * TIME_SCALE;
-    tickEnergy(store, delta);
+    if (typeof document !== "undefined" && document.hidden) return;
+    const step = Math.min(Math.max(delta, 0), 0.05);
+    advanceLoop(store, step);
+    tickEnergy(store, step);
   });
 
   return null;
@@ -52,6 +47,8 @@ function ClockDriver({
 function OrbScaffold() {
   return (
     <group>
+      <OrbHalo />
+      <OrbSatellites />
       <OrbCore />
       <OrbParticles />
     </group>
