@@ -221,6 +221,40 @@ export async function deleteDocument(id: string): Promise<void> {
   }
 }
 
+export async function transcribeUtterance(
+  pcm: ArrayBuffer,
+  format: { rate: number; width: number; channels: number },
+  signal?: AbortSignal,
+): Promise<{ text: string }> {
+  let response: Response;
+  try {
+    response = await fetch("/api/voice/transcribe", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Jarvis-Audio-Rate": String(format.rate),
+        "X-Jarvis-Audio-Width": String(format.width),
+        "X-Jarvis-Audio-Channels": String(format.channels),
+      },
+      body: pcm,
+      cache: "no-store",
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The request was cancelled.");
+    }
+    throw new Error("Could not reach Jarvis to transcribe speech.");
+  }
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Speech recognition failed."));
+  }
+
+  const data = (await response.json()) as { text?: string; error?: string };
+  return { text: typeof data.text === "string" ? data.text : "" };
+}
+
 export async function clearOllamaApiKey(): Promise<OllamaSettingsStatus> {
   const response = await fetch("/api/settings/ollama", { method: "DELETE" });
   if (!response.ok) {

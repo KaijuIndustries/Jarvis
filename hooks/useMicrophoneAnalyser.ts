@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { OrbAudioSource } from "@/components/orb";
+import type { MicrophoneSession } from "./useMicrophoneSession";
 
 const EMPTY: OrbAudioSource = {
   audioLevel: 0,
@@ -18,8 +19,6 @@ const ATTACK = 0.42;
 const RELEASE = 0.14;
 
 type Runtime = {
-  stream: MediaStream;
-  context: AudioContext;
   source: MediaStreamAudioSourceNode;
   analyser: AnalyserNode;
   freq: Uint8Array<ArrayBuffer>;
@@ -63,120 +62,22 @@ function rmsLevel(time: Uint8Array): number {
   return Math.sqrt(sum / time.length);
 }
 
-function describeMicError(error: unknown): string {
-  const name = error instanceof DOMException ? error.name : "";
-  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-    return "Microphone permission was denied.";
-  }
-  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-    return "No microphone is available.";
-  }
-  if (name === "NotReadableError" || name === "TrackStartError") {
-    return "The microphone is already in use or could not be opened.";
-  }
-  if (name === "SecurityError") {
-    return "Microphone access is blocked in this context. Use localhost or HTTPS.";
-  }
-  if (error instanceof Error && error.message) return error.message;
-  return "Microphone is unavailable.";
+function resetAudio(audioRef: { current: OrbAudioSource }) {
+  audioRef.current.audioLevel = 0;
+  audioRef.current.bass = 0;
+  audioRef.current.mids = 0;
+  audioRef.current.treble = 0;
 }
 
-export function useMicrophoneAnalyser() {
+export function useMicrophoneAnalyser(session: MicrophoneSession) {
   const audioRef = useRef<OrbAudioSource>({ ...EMPTY });
   const runtimeRef = useRef<Runtime | null>(null);
-  const generationRef = useRef(0);
-  const [enabled, setEnabled] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [voiceActive, setVoiceActive] = useState(false);
 
-  const teardown = useCallback(() => {
-    generationRef.current += 1;
-    const runtime = runtimeRef.current;
-    runtimeRef.current = null;
-    audioRef.current.audioLevel = 0;
-    audioRef.current.bass = 0;
-    audioRef.current.mids = 0;
-    audioRef.current.treble = 0;
-    setEnabled(false);
-    setVoiceActive(false);
-    if (!runtime) return;
-
-    cancelAnimationFrame(runtime.raf);
-    try {
-      runtime.source.disconnect();
-    } catch {
-      // Already disconnected.
-    }
-    try {
-      runtime.analyser.disconnect();
-    } catch {
-      // Already disconnected.
-    }
-    runtime.stream.getTracks().forEach((track) => track.stop());
-    void runtime.context.close();
-  }, []);
-
-  const start = useCallback(async () => {
-    if (runtimeRef.current) return;
-    setError(null);
-
-    if (typeof window === "undefined") {
-      setError("Microphone is only available in the browser.");
-      return;
-    }
-    if (!window.isSecureContext) {
-      setError("Microphone access needs localhost or HTTPS.");
-      return;
-    }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("This browser does not support microphone capture.");
-      return;
-    }
-    const AudioCtx =
-      window.AudioContext ||
-      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!AudioCtx) {
-      setError("Web Audio is not available in this browser.");
-      return;
-    }
-
-    const generation = generationRef.current + 1;
-    generationRef.current = generation;
-
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false,
-      });
-    } catch (cause) {
-      setError(describeMicError(cause));
-      return;
-    }
-
-    if (generationRef.current !== generation) {
-      stream.getTracks().forEach((track) => track.stop());
-      return;
-    }
-
-    const context = new AudioCtx();
-    try {
-      if (context.state === "suspended") await context.resume();
-    } catch {
-      stream.getTracks().forEach((track) => track.stop());
-      void context.close();
-      setError("Could not start the audio context.");
-      return;
-    }
-
-    if (generationRef.current !== generation) {
-      stream.getTracks().forEach((track) => track.stop());
-      void context.close();
+  useEffect(() => {
+    const stream = session.stream;
+    const context = session.context;
+    if (!stream || !context) {
       return;
     }
 
@@ -187,8 +88,6 @@ export function useMicrophoneAnalyser() {
     source.connect(analyser);
 
     const runtime: Runtime = {
-      stream,
-      context,
       source,
       analyser,
       freq: new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount)),
@@ -207,7 +106,7 @@ export function useMicrophoneAnalyser() {
       current.analyser.getByteFrequencyData(current.freq);
       current.analyser.getByteTimeDomainData(current.time);
 
-      const sampleRate = current.context.sampleRate;
+      const sampleRate = context.sampleRate;
       const next: OrbAudioSource = {
         audioLevel: clamp01(rmsLevel(current.time) * 3.4),
         bass: clamp01(bandMean(current.freq, sampleRate, 20, 250) * 2.6),
@@ -242,27 +141,30 @@ export function useMicrophoneAnalyser() {
       current.raf = requestAnimationFrame(tick);
     };
 
-    stream.getTracks().forEach((track) => {
-      track.addEventListener("ended", () => {
-        if (runtimeRef.current === runtime) {
-          teardown();
-          setError("The microphone stopped unexpectedly.");
-        }
-      });
-    });
-
-    setEnabled(true);
     runtime.raf = requestAnimationFrame(tick);
-  }, [teardown]);
 
-  useEffect(() => teardown, [teardown]);
+    return () => {
+      if (runtimeRef.current === runtime) {
+        runtimeRef.current = null;
+      }
+      cancelAnimationFrame(runtime.raf);
+      resetAudio(audioRef);
+      setVoiceActive(false);
+      try {
+        runtime.source.disconnect();
+      } catch {
+        // Already disconnected.
+      }
+      try {
+        runtime.analyser.disconnect();
+      } catch {
+        // Already disconnected.
+      }
+    };
+  }, [session.context, session.stream]);
 
   return {
     audioRef,
-    enabled,
-    error,
     voiceActive,
-    start,
-    stop: teardown,
   };
 }
