@@ -13,6 +13,9 @@ services:
       WAKEWORD_PORT: "10400"
       WAKEWORD_THRESHOLD: "0.5"
       WAKEWORD_COOLDOWN: "3"
+      WAKEWORD_CONFIRM_FRAMES: "2"
+      WAKEWORD_VAD_THRESHOLD: "0.5"
+      WAKEWORD_DEBUG: "false"
     volumes:
       - ./models/hey_friday.onnx:/app/models/hey_friday.onnx:ro
     restart: unless-stopped

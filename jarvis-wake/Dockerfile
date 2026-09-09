@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
     && python -c "import openwakeword; openwakeword.utils.download_models()"
 
 COPY jarvis-wake/server.py /app/server.py
+COPY jarvis-wake/wake_gate.py /app/wake_gate.py
 COPY models/hey_friday.onnx /app/models/hey_friday.onnx
 
 ENV WAKEWORD_MODEL=/app/models/hey_friday.onnx

@@ -14,13 +14,21 @@ from typing import Any
 
 import numpy as np
 
+from wake_gate import WakeGate, friday_score
+
 PHRASE = "Hey Friday"
 FRAME_SAMPLES = 1280
 MAX_BODY_BYTES = 32 * 1024
 SESSION_IDLE_SECONDS = 60.0
 DEFAULT_THRESHOLD = 0.5
+DEFAULT_CONFIRM_FRAMES = 2
+DEFAULT_VAD_THRESHOLD = 0.5
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 10400
+
+
+def env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def repo_model_path() -> Path:
@@ -33,7 +41,7 @@ def repo_model_path() -> Path:
     )
 
 
-def load_detector():
+def load_detector(vad_threshold: float):
     model_path = repo_model_path()
     if not model_path.is_file():
         raise FileNotFoundError(
@@ -48,23 +56,31 @@ def load_detector():
     return Model(
         wakeword_models=[str(model_path)],
         inference_framework="onnx",
+        vad_threshold=vad_threshold,
     )
 
 
 class WakeRuntime:
-    def __init__(self, model, threshold: float, cooldown_seconds: float) -> None:
+    def __init__(
+        self,
+        model,
+        gate: WakeGate,
+        vad_threshold: float,
+        debug: bool,
+    ) -> None:
         self.model = model
-        self.threshold = threshold
-        self.cooldown_seconds = cooldown_seconds
+        self.gate = gate
+        self.vad_threshold = vad_threshold
+        self.debug = debug
         self.lock = threading.Lock()
         self.session_id = ""
         self.pending = np.zeros(0, dtype=np.int16)
         self.last_seen = time.monotonic()
-        self.last_wake = 0.0
 
     def reset_session(self, session_id: str) -> None:
         self.session_id = session_id
         self.pending = np.zeros(0, dtype=np.int16)
+        self.gate.reset_streak()
         self.model.reset()
         self.last_seen = time.monotonic()
 
@@ -87,7 +103,8 @@ class WakeRuntime:
             self.pending = np.concatenate([self.pending, samples])
 
             best = 0.0
-            detected = False
+            woke = False
+            woke_score = 0.0
             while self.pending.size >= FRAME_SAMPLES:
                 frame = self.pending[:FRAME_SAMPLES]
                 self.pending = self.pending[FRAME_SAMPLES:]
@@ -95,34 +112,33 @@ class WakeRuntime:
                 score = friday_score(scores)
                 if score > best:
                     best = score
-                if score >= self.threshold:
-                    detected = True
+                decision = self.gate.observe(score, now)
+                if self.debug and score >= self.gate.threshold and not decision.woke:
+                    sys.stderr.write(
+                        "Wake candidate ignored: Hey Friday "
+                        f"(score={score:.2f}, threshold={self.gate.threshold:.2f}, "
+                        f"streak={decision.streak}/{self.gate.confirm_frames})\n"
+                    )
+                if decision.woke:
+                    woke = True
+                    woke_score = max(woke_score, score)
 
-            if detected and now - self.last_wake >= self.cooldown_seconds:
-                self.last_wake = now
-                return {"type": "wake", "phrase": PHRASE, "score": round(best, 4)}
+            if woke:
+                score = woke_score or best
+                sys.stderr.write(
+                    f"Wake detected: {PHRASE} "
+                    f"(score={score:.2f}, threshold={self.gate.threshold:.2f})\n"
+                )
+                return {"type": "wake", "phrase": PHRASE, "score": round(score, 4)}
             return {"type": "ok"}
-
-
-def friday_score(scores: dict[str, Any]) -> float:
-    best = 0.0
-    for name, value in scores.items():
-        if "friday" not in str(name).lower():
-            continue
-        try:
-            score = float(np.max(value) if hasattr(value, "__len__") else value)
-        except (TypeError, ValueError):
-            continue
-        if score > best:
-            best = score
-    return best
 
 
 class WakeHandler(BaseHTTPRequestHandler):
     runtime: WakeRuntime
 
     def log_message(self, format: str, *args: Any) -> None:
-        sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
+        if self.runtime.debug:
+            sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -144,6 +160,9 @@ class WakeHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "phrase": PHRASE,
                 "model": model_path.name,
+                "threshold": self.runtime.gate.threshold,
+                "confirm_frames": self.runtime.gate.confirm_frames,
+                "vad_threshold": self.runtime.vad_threshold,
             },
         )
 
@@ -173,7 +192,9 @@ def serve(runtime: WakeRuntime) -> None:
     WakeHandler.runtime = runtime
     server = ThreadingHTTPServer((host, port), WakeHandler)
     sys.stderr.write(
-        f"jarvis-wake listening on {host}:{port} for {PHRASE} ({repo_model_path()})\n"
+        f"jarvis-wake listening on {host}:{port} for {PHRASE} "
+        f"({repo_model_path().name}) threshold={runtime.gate.threshold:.2f} "
+        f"confirm={runtime.gate.confirm_frames} vad={runtime.vad_threshold:.2f}\n"
     )
     server.serve_forever()
 
@@ -181,12 +202,20 @@ def serve(runtime: WakeRuntime) -> None:
 def main() -> int:
     threshold = float(os.environ.get("WAKEWORD_THRESHOLD", str(DEFAULT_THRESHOLD)))
     cooldown = float(os.environ.get("WAKEWORD_COOLDOWN", "3"))
+    confirm_frames = int(os.environ.get("WAKEWORD_CONFIRM_FRAMES", str(DEFAULT_CONFIRM_FRAMES)))
+    vad_threshold = float(os.environ.get("WAKEWORD_VAD_THRESHOLD", str(DEFAULT_VAD_THRESHOLD)))
+    debug = env_flag("WAKEWORD_DEBUG")
     try:
-        model = load_detector()
+        model = load_detector(vad_threshold)
     except Exception as error:  # noqa: BLE001
         sys.stderr.write(f"jarvis-wake failed to start: {error}\n")
         return 1
-    runtime = WakeRuntime(model, threshold=threshold, cooldown_seconds=cooldown)
+    gate = WakeGate(
+        threshold=threshold,
+        confirm_frames=confirm_frames,
+        cooldown_seconds=cooldown,
+    )
+    runtime = WakeRuntime(model, gate=gate, vad_threshold=vad_threshold, debug=debug)
     if "--check" in sys.argv:
         print("ok")
         return 0

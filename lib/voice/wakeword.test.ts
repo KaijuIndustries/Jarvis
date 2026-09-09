@@ -9,6 +9,22 @@ test("accepts a Hey Friday wake event", () => {
   assert.deepEqual(parseWakeAudioResult(event), event);
 });
 
+test("keeps the existing wake payload when extra diagnostic fields are present", () => {
+  const event = {
+    type: "wake",
+    phrase: WAKE_PHRASE,
+    score: 0.73,
+    threshold: 0.5,
+  };
+  assert.equal(isWakeDetection(event), true);
+  const parsed = parseWakeAudioResult(event);
+  assert.equal(parsed.type, "wake");
+  if (parsed.type === "wake") {
+    assert.equal(parsed.phrase, WAKE_PHRASE);
+    assert.equal(parsed.score, 0.73);
+  }
+});
+
 test("rejects a different wake phrase instead of rewriting it", () => {
   assert.equal(
     isWakeDetection({ type: "wake", phrase: "Hey Jarvis", score: 0.99 }),
