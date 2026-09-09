@@ -10,6 +10,7 @@ import {
   shouldStartFollowup,
   type OrbMicMode,
 } from "@/lib/voice/orb-turn";
+import { shouldExpectFollowup } from "@/lib/voice/closing-phrase";
 import type { useVoiceCapture } from "./useVoiceCapture";
 
 type Voice = ReturnType<typeof useVoiceCapture>;
@@ -28,6 +29,7 @@ export function useOrbTurnMachine(input: {
   const [mode, setMode] = useState<OrbMicMode>("passive");
   const consumedRef = useRef(false);
   const expectFollowupRef = useRef(false);
+  const closeAfterTurnRef = useRef(false);
   const sawBusyRef = useRef(false);
   const modeRef = useRef<OrbMicMode>("passive");
   const startCapture = input.voice.start;
@@ -47,6 +49,8 @@ export function useOrbTurnMachine(input: {
       }
       pauseWake();
       consumedRef.current = false;
+      expectFollowupRef.current = false;
+      closeAfterTurnRef.current = false;
       setMicMode("command");
       void startCapture({
         autoStop: true,
@@ -104,10 +108,13 @@ export function useOrbTurnMachine(input: {
       if (trimmed) {
         if (consumedRef.current) return;
         consumedRef.current = true;
-        expectFollowupRef.current = true;
+        const wantsFollowup = shouldExpectFollowup(trimmed);
+        expectFollowupRef.current = wantsFollowup;
+        closeAfterTurnRef.current = !wantsFollowup;
         sawBusyRef.current = false;
         void sendMessage(trimmed).catch(() => {
           expectFollowupRef.current = false;
+          closeAfterTurnRef.current = false;
           sawBusyRef.current = false;
           setMicMode("passive");
         });
@@ -115,6 +122,7 @@ export function useOrbTurnMachine(input: {
       }
 
       expectFollowupRef.current = false;
+      closeAfterTurnRef.current = false;
       sawBusyRef.current = false;
       setMicMode("passive");
     },
@@ -123,11 +131,13 @@ export function useOrbTurnMachine(input: {
 
   useEffect(() => {
     if (input.streaming || input.speaking) {
-      if (expectFollowupRef.current) sawBusyRef.current = true;
+      if (expectFollowupRef.current || closeAfterTurnRef.current) {
+        sawBusyRef.current = true;
+      }
       return;
     }
     if (
-      !shouldStartFollowup({
+      shouldStartFollowup({
         pendingFollowup: expectFollowupRef.current && sawBusyRef.current,
         streaming: input.streaming,
         speaking: input.speaking,
@@ -135,18 +145,30 @@ export function useOrbTurnMachine(input: {
         transcribing: input.voice.transcribing,
       })
     ) {
-      return;
+      expectFollowupRef.current = false;
+      closeAfterTurnRef.current = false;
+      sawBusyRef.current = false;
+      const timer = window.setTimeout(() => beginFollowup(), 0);
+      return () => window.clearTimeout(timer);
     }
-    expectFollowupRef.current = false;
-    sawBusyRef.current = false;
-    const timer = window.setTimeout(() => beginFollowup(), 0);
-    return () => window.clearTimeout(timer);
+    if (
+      closeAfterTurnRef.current &&
+      sawBusyRef.current &&
+      !input.voice.recording &&
+      !input.voice.transcribing
+    ) {
+      closeAfterTurnRef.current = false;
+      sawBusyRef.current = false;
+      const timer = window.setTimeout(() => setMicMode("passive"), 0);
+      return () => window.clearTimeout(timer);
+    }
   }, [
     beginFollowup,
     input.speaking,
     input.streaming,
     input.voice.recording,
     input.voice.transcribing,
+    setMicMode,
   ]);
 
   const wakeArmed = shouldArmWake({
@@ -159,6 +181,7 @@ export function useOrbTurnMachine(input: {
 
   const startManual = useCallback(() => {
     expectFollowupRef.current = false;
+    closeAfterTurnRef.current = false;
     sawBusyRef.current = false;
     consumedRef.current = false;
     pauseWake();
