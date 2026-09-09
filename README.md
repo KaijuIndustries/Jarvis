@@ -150,6 +150,8 @@ Restart Jarvis after changing the value. No code changes are required.
 | `ALLOWED_DEV_ORIGINS` | unset | Extra hostnames allowed to use `next dev` from the LAN |
 | `WYOMING_WHISPER_URL` | `127.0.0.1:10300` | Local Wyoming Whisper TCP host:port |
 | `WYOMING_WHISPER_LANGUAGE` | `en` | Language hint sent with each transcribe request |
+| `WYOMING_PIPER_URL` | `127.0.0.1:10200` | Local Wyoming Piper TCP host:port |
+| `WYOMING_PIPER_VOICE` | `en_GB-alba-medium` | Piper voice used for Orb spoken replies |
 
 Copy `.env.example` to `.env` or `.env.local`. Secrets and hostnames stay in environment variables; nothing is hard-coded.
 
@@ -159,7 +161,7 @@ Restrict search per model with `WEB_SEARCH_MODELS`. Example: `WEB_SEARCH_MODELS=
 
 ## Usage
 
-1. Open Jarvis in a browser. Chat is `/`. A dedicated Orb display is `/orb` (Ctrl+Shift+O toggles). On `/orb`, enable the microphone and use **Start speaking** / **Stop** to transcribe one utterance through local Wyoming Whisper.
+1. Open Jarvis in a browser. Chat is `/`. A dedicated Orb display is `/orb` (Ctrl+Shift+O toggles). On `/orb`, enable the microphone and use **Start speaking** / **Stop** to transcribe one utterance through local Wyoming Whisper. The assistant reply is then spoken through local Wyoming Piper.
 2. Confirm the status indicator shows Ollama connected.
 3. Select a model.
 4. Send a message.
@@ -179,12 +181,12 @@ app/                 Next.js App Router (UI + API routes)
   api/settings/      Server-side Ollama API key status/save/clear
   api/context/       Persistent context CRUD
   api/documents/     Knowledge document upload/list/delete
-  api/voice/         Speech transcription (Wyoming Whisper)
+  api/voice/         Speech transcription and Orb TTS (Wyoming Whisper / Piper)
 components/          Chat UI and Directory views
 hooks/               Browser microphone analyser and speech capture
 lib/
   ai/                Provider interface, Ollama adapter, web search client
-  voice/             Wyoming client and PCM helpers
+  voice/             Wyoming client, Whisper, Piper, and PCM helpers
   tools/             Tool registry (web_search first; others later)
   context/           Persistent context CRUD and chat prompt injection
   knowledge/         Document storage service
@@ -237,4 +239,4 @@ This layout is compatible with later containerisation: configuration is via envi
 
 ## What this version does not include
 
-Routing between multiple models/GPUs, ComfyUI, Piper TTS, wake-word detection, automatic memory extraction (SAVE/UPDATE/IGNORE), RAG, and Home Assistant are intentionally out of scope. `/orb` can transcribe one push-to-talk utterance through local Wyoming Whisper; audio stays on the Jarvis host and is not sent to Ollama. Persistent context is injected into chat as a read-only system message. Web search is an optional backend tool, not a full agent loop.
+Routing between multiple models/GPUs, ComfyUI, wake-word detection, automatic memory extraction (SAVE/UPDATE/IGNORE), RAG, and Home Assistant are intentionally out of scope. `/orb` can transcribe one push-to-talk utterance through local Wyoming Whisper and speak the reply through local Wyoming Piper; audio stays on the Jarvis host and is not sent to Ollama. Persistent context is injected into chat as a read-only system message. Web search is an optional backend tool, not a full agent loop.

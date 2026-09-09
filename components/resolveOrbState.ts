@@ -10,11 +10,13 @@ export function resolveOrbState(input: {
   checkingHealth: boolean;
   recording?: boolean;
   transcribing?: boolean;
+  speaking?: boolean;
   voiceError?: boolean;
 }): OrbState {
   if (input.voiceError) return "error";
   if (!input.checkingHealth && !input.healthOk) return "error";
   if (input.transcribing || input.streaming) return "thinking";
   if (input.recording) return "listening";
+  if (input.speaking) return "speaking";
   return "idle";
 }

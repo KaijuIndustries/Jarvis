@@ -16,8 +16,15 @@ export async function withWyomingSocket<T>(options: {
   port: number;
   signal?: AbortSignal;
   connectTimeoutMs?: number;
+  unavailable?: () => VoiceError;
+  closed?: () => VoiceError;
   run: (connection: WyomingConnection) => Promise<T>;
 }): Promise<T> {
+  const unavailable = options.unavailable ?? voiceUnavailable;
+  const closedError =
+    options.closed ??
+    (() =>
+      new VoiceError(502, "Speech recognition closed the connection.", "whisper_closed"));
   if (options.signal?.aborted) {
     throw new VoiceError(499, "The request was cancelled.", "cancelled");
   }
@@ -27,13 +34,13 @@ export async function withWyomingSocket<T>(options: {
   const parser = new WyomingEventParser();
   const pending: WyomingEvent[] = [];
   const waiters: Array<(event: WyomingEvent) => void> = [];
-  let closed = false;
+  let socketClosed = false;
   let fail: ((error: Error) => void) | null = null;
 
   const connection = {
     write(event: WyomingEvent) {
-      if (closed) {
-        throw voiceUnavailable();
+      if (socketClosed) {
+        throw unavailable();
       }
       socket.write(encodeWyomingEvent(event));
     },
@@ -41,12 +48,8 @@ export async function withWyomingSocket<T>(options: {
       if (pending.length > 0) {
         return pending.shift() as WyomingEvent;
       }
-      if (closed) {
-        throw new VoiceError(
-          502,
-          "Speech recognition closed the connection.",
-          "whisper_closed",
-        );
+      if (socketClosed) {
+        throw closedError();
       }
       return new Promise<WyomingEvent>((resolve, reject) => {
         waiters.push(resolve);
@@ -60,8 +63,8 @@ export async function withWyomingSocket<T>(options: {
   };
 
   function destroy(error?: Error) {
-    if (closed) return;
-    closed = true;
+    if (socketClosed) return;
+    socketClosed = true;
     options.signal?.removeEventListener("abort", onAbort);
     socket.removeAllListeners();
     socket.destroy();
@@ -84,22 +87,26 @@ export async function withWyomingSocket<T>(options: {
         event = parser.pull();
       }
     } catch (error) {
-      destroy(mapProtocolError(error));
+      destroy(mapProtocolError(error, unavailable));
     }
   });
 
   socket.on("error", () => {
-    destroy(voiceUnavailable());
+    destroy(unavailable());
   });
 
   socket.on("close", () => {
-    destroy(
-      new VoiceError(502, "Speech recognition closed the connection.", "whisper_closed"),
-    );
+    destroy(closedError());
   });
 
   try {
-    await connectSocket(socket, options.host, options.port, options.connectTimeoutMs);
+    await connectSocket(
+      socket,
+      options.host,
+      options.port,
+      options.connectTimeoutMs,
+      unavailable,
+    );
     return await options.run(connection);
   } finally {
     destroy();
@@ -116,16 +123,17 @@ function connectSocket(
   host: string,
   port: number,
   timeoutMs = DEFAULT_CONNECT_MS,
+  unavailable: () => VoiceError = voiceUnavailable,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const onError = () => {
       cleanup();
-      reject(voiceUnavailable());
+      reject(unavailable());
     };
     const onTimeout = () => {
       cleanup();
       socket.destroy();
-      reject(voiceUnavailable());
+      reject(unavailable());
     };
     const onConnect = () => {
       cleanup();
@@ -146,12 +154,15 @@ function connectSocket(
   });
 }
 
-function mapProtocolError(error: unknown): VoiceError {
+function mapProtocolError(
+  error: unknown,
+  unavailable: () => VoiceError = voiceUnavailable,
+): VoiceError {
   if (error instanceof VoiceError) return error;
   if (error instanceof WyomingProtocolError) {
-    return new VoiceError(502, error.message, "whisper_protocol");
+    return new VoiceError(502, error.message, "wyoming_protocol");
   }
-  return voiceUnavailable();
+  return unavailable();
 }
 
 export async function transcribePcmOverWyoming(options: {

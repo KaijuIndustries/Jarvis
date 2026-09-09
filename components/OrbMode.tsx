@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { JarvisOrb } from "@/components/orb";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { JarvisOrb, type OrbAudioSource } from "@/components/orb";
 import { useMicrophoneAnalyser } from "@/hooks/useMicrophoneAnalyser";
 import { useMicrophoneSession } from "@/hooks/useMicrophoneSession";
 import { useOrbChat } from "@/hooks/useOrbChat";
+import { useOrbSpeech } from "@/hooks/useOrbSpeech";
 import { useVoiceCapture } from "@/hooks/useVoiceCapture";
+import { EMPTY_ORB_AUDIO } from "@/lib/client/audio-bands";
 import { fetchHealth } from "@/lib/client/api";
 import { resolveOrbState } from "./resolveOrbState";
 
@@ -23,13 +25,24 @@ export function OrbMode() {
     () => false,
   );
   const session = useMicrophoneSession();
-  const mic = useMicrophoneAnalyser(session);
+  const audioRef = useRef<OrbAudioSource>({ ...EMPTY_ORB_AUDIO });
   const voice = useVoiceCapture(session);
   const chat = useOrbChat({
     transcript: voice.transcript,
     recording: voice.recording,
     transcribing: voice.transcribing,
   });
+  const speech = useOrbSpeech({
+    audioRef,
+    context: session.context,
+  });
+  useMicrophoneAnalyser(session, {
+    audioRef,
+    suppressWrites: speech.speaking,
+  });
+  const pendingSpeakRef = useRef(false);
+  const speak = speech.speak;
+  const stopSpeech = speech.stop;
 
   const state = resolveOrbState({
     streaming: chat.streaming,
@@ -37,8 +50,33 @@ export function OrbMode() {
     checkingHealth,
     recording: voice.recording,
     transcribing: voice.transcribing,
+    speaking: speech.speaking,
     voiceError: Boolean(session.error || voice.error || chat.error),
   });
+
+  useEffect(() => {
+    if (voice.recording || voice.transcribing) {
+      pendingSpeakRef.current = false;
+      stopSpeech();
+      return;
+    }
+    if (chat.streaming) {
+      pendingSpeakRef.current = true;
+      stopSpeech();
+      return;
+    }
+    if (!pendingSpeakRef.current) return;
+    pendingSpeakRef.current = false;
+    const text = chat.reply.trim();
+    if (text) void speak(text);
+  }, [
+    chat.reply,
+    chat.streaming,
+    speak,
+    stopSpeech,
+    voice.recording,
+    voice.transcribing,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,30 +96,34 @@ export function OrbMode() {
     };
   }, []);
 
-  const statusError = session.error || voice.error || chat.error;
+  const statusError = session.error || voice.error || chat.error || speech.error;
   const statusText = session.error
     ? session.error
     : voice.error
       ? voice.error
       : chat.error
         ? chat.error
-        : voice.transcribing
-          ? "Transcribing..."
-          : voice.recording
-            ? "Listening..."
-            : chat.streaming
-              ? chat.reply || "Thinking..."
-              : chat.reply
-                ? chat.reply
-                : voice.transcript === ""
-                  ? "I didn't hear anything."
-                  : voice.transcript;
+        : speech.error
+          ? speech.error
+          : voice.transcribing
+            ? "Transcribing..."
+            : voice.recording
+              ? "Listening..."
+              : chat.streaming
+                ? chat.reply || "Thinking..."
+                : speech.speaking
+                  ? chat.reply
+                  : chat.reply
+                    ? chat.reply
+                    : voice.transcript === ""
+                      ? "I didn't hear anything."
+                      : voice.transcript;
 
   return (
     <div className="fixed inset-0 h-dvh w-dvw overflow-hidden bg-[#05060a]">
       <JarvisOrb
         state={state}
-        audioRef={mic.audioRef}
+        audioRef={audioRef}
         className="h-full w-full"
       />
       {controlsReady ? (
@@ -98,7 +140,7 @@ export function OrbMode() {
             ) : (
               <button
                 type="button"
-                disabled={voice.transcribing || chat.streaming}
+                disabled={voice.transcribing || chat.streaming || speech.speaking}
                 onClick={() => {
                   if (voice.recording) void voice.stop();
                   else void voice.start();

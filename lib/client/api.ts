@@ -221,6 +221,33 @@ export async function deleteDocument(id: string): Promise<void> {
   }
 }
 
+export async function synthesizeSpeech(
+  text: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch("/api/voice/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      cache: "no-store",
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The request was cancelled.");
+    }
+    throw new Error("Could not reach Jarvis to speak.");
+  }
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Speech synthesis failed."));
+  }
+
+  return response.blob();
+}
+
 export async function transcribeUtterance(
   pcm: ArrayBuffer,
   format: { rate: number; width: number; channels: number },
