@@ -1,5 +1,5 @@
 import { serverConfig } from "@/lib/config";
-import type { ToolName } from "./types";
+import { HOME_ASSISTANT_TOOLS, type ToolName } from "./types";
 
 /**
  * Per-model tool access.
@@ -8,12 +8,26 @@ import type { ToolName } from "./types";
  * Example: WEB_SEARCH_MODELS=llama3.2,qwen3
  */
 export function modelHasTool(model: string, tool: ToolName): boolean {
-  if (tool !== "web_search") return false;
-  const raw = serverConfig.webSearchModels.trim();
-  if (!raw) return false;
-  if (raw === "*") return true;
+  if (tool === "web_search") {
+    return modelListAllows(serverConfig.webSearchModels, model);
+  }
+  if ((HOME_ASSISTANT_TOOLS as readonly string[]).includes(tool)) {
+    if (!serverConfig.homeAssistantUrl) return false;
+    return modelListAllows(serverConfig.homeAssistantModels, model);
+  }
+  return false;
+}
 
-  return raw
+export function modelHasHomeAssistantTools(model: string): boolean {
+  return modelHasTool(model, "home_assistant.get_entities");
+}
+
+function modelListAllows(raw: string, model: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (trimmed === "*") return true;
+
+  return trimmed
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean)

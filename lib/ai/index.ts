@@ -6,6 +6,9 @@ export type {
   ChatStreamChunk,
   ChatStreamParams,
   ModelInfo,
+  ProviderChatMessage,
   ProviderHealth,
+  ProviderToolCall,
+  ProviderToolDefinition,
   ToolEvent,
 } from "./types";

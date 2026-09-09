@@ -5,6 +5,36 @@ export type ChatMessage = {
   content: string;
 };
 
+export type ProviderToolDefinition = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export type ProviderToolCall = {
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+export type ProviderChatMessage =
+  | ChatMessage
+  | {
+      role: "assistant";
+      content: string;
+      tool_calls?: Array<{
+        type?: "function";
+        function: { name: string; arguments: Record<string, unknown> };
+      }>;
+    }
+  | {
+      role: "tool";
+      content: string;
+      tool_name?: string;
+    };
+
 export type ModelInfo = {
   /** Provider-native identifier, e.g. "llama3.2:latest". */
   id: string;
@@ -31,10 +61,12 @@ export type ChatStreamChunk = {
   content: string;
   done: boolean;
   tool?: ToolEvent;
+  toolCalls?: ProviderToolCall[];
 };
 
 export type ChatStreamParams = {
   model: string;
-  messages: ChatMessage[];
+  messages: ProviderChatMessage[];
   signal?: AbortSignal;
+  tools?: ProviderToolDefinition[];
 };

@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { fetchHealth, fetchModels, streamChat } from "@/lib/client/api";
-import type { ChatMessage, ModelInfo, ProviderHealth } from "@/lib/ai";
+import type { ChatMessage, ModelInfo, ProviderHealth, ToolEvent } from "@/lib/ai";
 import type { Conversation, ConversationMessage } from "@/lib/conversations/types";
 import {
   getSessionServerSnapshot,
@@ -221,12 +221,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
           signal: controller.signal,
           onChunk: (chunk) => {
             if (chunk.tool) {
-              const toolStatus =
-                chunk.tool.status === "started"
-                  ? "Searching the web…"
-                  : chunk.tool.status === "done"
-                    ? "Used web search"
-                    : chunk.tool.message ?? "Web search unavailable";
+              const toolStatus = describeToolStatus(chunk.tool);
               patchConversation(conversationId, (conversation) => ({
                 ...conversation,
                 updatedAt: Date.now(),
@@ -384,6 +379,20 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   );
 
   return <JarvisContext.Provider value={value}>{children}</JarvisContext.Provider>;
+}
+
+function describeToolStatus(tool: ToolEvent): string {
+  const home = tool.name.startsWith("home_assistant");
+  if (tool.status === "started") {
+    return home ? "Talking to Home Assistant…" : "Searching the web…";
+  }
+  if (tool.status === "done") {
+    return home ? "Used Home Assistant" : "Used web search";
+  }
+  return (
+    tool.message ??
+    (home ? "Home Assistant unavailable" : "Web search unavailable")
+  );
 }
 
 export function useJarvis(): JarvisContextValue {

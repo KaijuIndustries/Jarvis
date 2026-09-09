@@ -1,15 +1,31 @@
 import { getAIProvider, type ChatMessage } from "@/lib/ai";
+import type {
+  ProviderChatMessage,
+  ProviderToolCall,
+  ProviderToolDefinition,
+} from "@/lib/ai/types";
 import {
   formatServerDateTime,
   queryNeedsServerTime,
 } from "@/lib/ai/server-time";
 import { formatContextForPrompt } from "@/lib/context/prompt";
 import { selectContextForPrompt } from "@/lib/context/service";
+import {
+  formatHomeAssistantCatalog,
+  getCachedEntities,
+  HOME_ASSISTANT_INSTRUCTIONS,
+  isHomeAssistantConfigured,
+} from "@/lib/home-assistant";
+import { modelHasHomeAssistantTools, modelHasTool } from "@/lib/tools/access";
+import { HOME_ASSISTANT_TOOL_DEFINITIONS } from "@/lib/tools/home-assistant";
+import { queryNeedsHomeAssistant } from "@/lib/tools/needs-home";
 import { queryNeedsWebSearch } from "@/lib/tools/needs-search";
-import { modelHasTool } from "@/lib/tools/access";
 import { runTool } from "@/lib/tools/registry";
+import { isToolName, type ToolInput } from "@/lib/tools/types";
 
 export const runtime = "nodejs";
+
+const MAX_TOOL_ROUNDS = 4;
 
 type ChatRequestBody = {
   model?: string;
@@ -79,6 +95,164 @@ async function withOptionalWebSearch(
   ];
 }
 
+async function withHomeAssistant(
+  model: string,
+  messages: ChatMessage[],
+  signal: AbortSignal,
+): Promise<{
+  messages: ChatMessage[];
+  tools?: ProviderToolDefinition[];
+}> {
+  if (!isHomeAssistantConfigured() || !modelHasHomeAssistantTools(model)) {
+    return { messages };
+  }
+
+  const lastUser = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  const blocks: ChatMessage[] = [
+    { role: "system", content: HOME_ASSISTANT_INSTRUCTIONS },
+  ];
+  if (lastUser && queryNeedsHomeAssistant(lastUser.content)) {
+    try {
+      const catalog = formatHomeAssistantCatalog(
+        await getCachedEntities({ signal }),
+      );
+      blocks.push({ role: "system", content: catalog });
+    } catch {
+      // Chat still works without a catalog; the model can call get_entities.
+    }
+  }
+  return {
+    messages: [...blocks, ...messages],
+    tools: HOME_ASSISTANT_TOOL_DEFINITIONS,
+  };
+}
+
+async function streamWithOptionalTools(params: {
+  model: string;
+  messages: ChatMessage[];
+  tools?: ProviderToolDefinition[];
+  signal: AbortSignal;
+  send: (payload: unknown) => void;
+}): Promise<void> {
+  const provider = getAIProvider();
+  if (!params.tools?.length) {
+    for await (const chunk of provider.chatStream({
+      model: params.model,
+      messages: params.messages,
+      signal: params.signal,
+    })) {
+      params.send(chunk);
+    }
+    return;
+  }
+
+  let messages: ProviderChatMessage[] = params.messages;
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    const pendingCalls: ProviderToolCall[] = [];
+    for await (const chunk of provider.chatStream({
+      model: params.model,
+      messages,
+      tools: params.tools,
+      signal: params.signal,
+    })) {
+      if (chunk.toolCalls?.length) {
+        pendingCalls.push(...chunk.toolCalls);
+        continue;
+      }
+      if (chunk.content) {
+        params.send({ content: chunk.content, done: false });
+      }
+    }
+
+    if (pendingCalls.length === 0) {
+      return;
+    }
+
+    messages = [
+      ...messages,
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: pendingCalls.map((call) => ({
+          type: "function" as const,
+          function: { name: call.name, arguments: call.arguments },
+        })),
+      },
+    ];
+
+    for (const call of pendingCalls) {
+      params.send({
+        content: "",
+        done: false,
+        tool: { name: call.name, status: "started" },
+      });
+      if (!isToolName(call.name) || call.name === "web_search") {
+        const denied = JSON.stringify({
+          success: false,
+          error: "unknown_tool",
+          name: call.name,
+        });
+        params.send({
+          content: "",
+          done: false,
+          tool: { name: call.name, status: "error", message: "unknown_tool" },
+        });
+        messages = [
+          ...messages,
+          { role: "tool", tool_name: call.name, content: denied },
+        ];
+        continue;
+      }
+      const result = await runTool(call.name, toolInputFromArgs(call.arguments), {
+        model: params.model,
+        signal: params.signal,
+      });
+      params.send({
+        content: "",
+        done: false,
+        tool: {
+          name: call.name,
+          status: result.ok ? "done" : "error",
+          message: result.error,
+        },
+      });
+      messages = [
+        ...messages,
+        {
+          role: "tool",
+          tool_name: call.name,
+          content: result.content || JSON.stringify({ success: false, error: result.error }),
+        },
+      ];
+    }
+  }
+}
+
+function toolInputFromArgs(args: Record<string, unknown>): ToolInput {
+  const entityId = args.entity_id;
+  return {
+    query: typeof args.query === "string" ? args.query : undefined,
+    entity_id:
+      typeof entityId === "string" ||
+      (Array.isArray(entityId) && entityId.every((id) => typeof id === "string"))
+        ? (entityId as string | string[])
+        : undefined,
+    name: typeof args.name === "string" ? args.name : undefined,
+    domain: typeof args.domain === "string" ? args.domain : undefined,
+    area: typeof args.area === "string" ? args.area : undefined,
+    search: typeof args.search === "string" ? args.search : undefined,
+    service: typeof args.service === "string" ? args.service : undefined,
+    service_data:
+      args.service_data &&
+      typeof args.service_data === "object" &&
+      !Array.isArray(args.service_data)
+        ? (args.service_data as Record<string, unknown>)
+        : undefined,
+  };
+}
+
 export async function POST(request: Request) {
   let body: ChatRequestBody;
   try {
@@ -99,7 +273,6 @@ export async function POST(request: Request) {
     return Response.json({ error: "messages are required" }, { status: 400 });
   }
 
-  const provider = getAIProvider();
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -132,13 +305,14 @@ export async function POST(request: Request) {
           request.signal,
           send,
         );
-        for await (const chunk of provider.chatStream({
+        const withHa = await withHomeAssistant(model, outbound, request.signal);
+        await streamWithOptionalTools({
           model,
-          messages: outbound,
+          messages: withHa.messages,
+          tools: withHa.tools,
           signal: request.signal,
-        })) {
-          send(chunk);
-        }
+          send,
+        });
         send({ content: "", done: true });
       } catch (error) {
         if (request.signal.aborted) {

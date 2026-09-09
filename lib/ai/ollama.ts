@@ -5,6 +5,7 @@ import type {
   ChatStreamParams,
   ModelInfo,
   ProviderHealth,
+  ProviderToolCall,
 } from "./types";
 
 type OllamaTag = {
@@ -19,7 +20,15 @@ type OllamaTag = {
 };
 
 type OllamaChatLine = {
-  message?: { content?: string };
+  message?: {
+    content?: string;
+    tool_calls?: Array<{
+      function?: {
+        name?: string;
+        arguments?: Record<string, unknown> | string;
+      };
+    }>;
+  };
   error?: string;
   done?: boolean;
 };
@@ -119,6 +128,7 @@ export const ollamaProvider: AIProvider = {
         messages: params.messages,
         stream: true,
         think: false,
+        ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
       }),
     });
 
@@ -137,13 +147,63 @@ export const ollamaProvider: AIProvider = {
       throw new Error("Ollama returned an empty response body");
     }
 
+    const pendingCalls: ProviderToolCall[] = [];
     for await (const line of iterateNdjson(response.body)) {
       if (line.error) {
         throw new Error(line.error);
       }
       const content = line.message?.content ?? "";
-      yield { content, done: Boolean(line.done) };
-      if (line.done) return;
+      const parsedCalls = parseToolCalls(line.message?.tool_calls);
+      if (parsedCalls.length > 0) pendingCalls.push(...parsedCalls);
+      const done = Boolean(line.done);
+      yield {
+        content,
+        done,
+        toolCalls: done && pendingCalls.length > 0 ? pendingCalls : undefined,
+      };
+      if (done) return;
     }
   },
 };
+
+function parseToolCalls(
+  raw:
+    | Array<{
+        function?: {
+          name?: string;
+          arguments?: Record<string, unknown> | string;
+        };
+      }>
+    | undefined,
+): ProviderToolCall[] {
+  if (!raw?.length) return [];
+  const calls: ProviderToolCall[] = [];
+  for (const item of raw) {
+    const name = item.function?.name?.trim();
+    if (!name) continue;
+    calls.push({
+      name,
+      arguments: parseToolCallArguments(item.function?.arguments),
+    });
+  }
+  return calls;
+}
+
+function parseToolCallArguments(
+  value: Record<string, unknown> | string | undefined,
+): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}

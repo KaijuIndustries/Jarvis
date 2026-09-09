@@ -1,9 +1,18 @@
 import { modelHasTool } from "./access";
+import {
+  homeAssistantCallServiceTool,
+  homeAssistantGetEntitiesTool,
+  homeAssistantGetStateTool,
+} from "./home-assistant";
 import type { Tool, ToolContext, ToolInput, ToolName, ToolResult } from "./types";
+import { isToolName } from "./types";
 import { webSearchTool } from "./web-search";
 
 const tools: Record<ToolName, Tool> = {
   web_search: webSearchTool,
+  "home_assistant.get_entities": homeAssistantGetEntitiesTool,
+  "home_assistant.get_state": homeAssistantGetStateTool,
+  "home_assistant.call_service": homeAssistantCallServiceTool,
 };
 
 export function getTool(name: ToolName): Tool {
@@ -11,15 +20,27 @@ export function getTool(name: ToolName): Tool {
 }
 
 export async function runTool(
-  name: ToolName,
+  name: string,
   input: ToolInput,
   context: ToolContext,
 ): Promise<ToolResult> {
+  if (!isToolName(name)) {
+    return {
+      ok: false,
+      tool: "web_search",
+      content: JSON.stringify({ success: false, error: "unknown_tool", name }),
+      error: "unknown_tool",
+    };
+  }
   if (!modelHasTool(context.model, name)) {
     return {
       ok: false,
       tool: name,
-      content: "",
+      content: JSON.stringify({
+        success: false,
+        error: "tool_not_allowed",
+        message: "This model is not allowed to use that tool",
+      }),
       error: "This model is not allowed to use that tool",
     };
   }

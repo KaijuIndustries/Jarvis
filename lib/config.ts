@@ -24,6 +24,16 @@ export const serverConfig = {
    * "*" = all models. Comma-separated IDs otherwise (e.g. "llama3.2,qwen3").
    */
   webSearchModels: readEnv("WEB_SEARCH_MODELS", "*"),
+  /**
+   * Home Assistant REST base URL (no trailing /api required). Token is read
+   * only inside the Home Assistant client and is never stored here.
+   */
+  homeAssistantUrl: process.env.HOME_ASSISTANT_URL?.trim() ?? "",
+  /**
+   * Models allowed to use Home Assistant tools.
+   * "*" = all models. Comma-separated IDs otherwise.
+   */
+  homeAssistantModels: readEnv("HOME_ASSISTANT_MODELS", "*"),
   ...parseNamedHostPort(
     "wyomingWhisper",
     readEnv("WYOMING_WHISPER_URL", "127.0.0.1:10300"),
