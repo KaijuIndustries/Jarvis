@@ -23,7 +23,7 @@ test("wake is armed only in passive idle", () => {
   assert.equal(shouldArmWake({ ...idle, streaming: true }), false);
 });
 
-test("follow-up never starts listening on its own", () => {
+test("follow-up starts only after a finished orb turn", () => {
   const ready = {
     pendingFollowup: true,
     streaming: false,
@@ -31,18 +31,32 @@ test("follow-up never starts listening on its own", () => {
     recording: false,
     transcribing: false,
   };
-  assert.equal(shouldStartFollowup(ready), false);
+  assert.equal(shouldStartFollowup(ready), true);
+  assert.equal(shouldStartFollowup({ ...ready, speaking: true }), false);
+  assert.equal(shouldStartFollowup({ ...ready, streaming: true }), false);
+  assert.equal(shouldStartFollowup({ ...ready, recording: true }), false);
   assert.equal(shouldStartFollowup({ ...ready, pendingFollowup: false }), false);
 });
 
-test("listening starts only from a matched wake word or a manual press", () => {
+test("follow-up stays blocked while speech is still active", () => {
+  const ready = {
+    pendingFollowup: true,
+    streaming: false,
+    speaking: true,
+    recording: false,
+    transcribing: false,
+  };
+  assert.equal(shouldStartFollowup(ready), false);
+});
+
+test("listening starts from a matched wake, a follow-up, or a manual press", () => {
   assert.equal(shouldBeginListening({ source: "wake", phraseMatched: true }), true);
   assert.equal(shouldBeginListening({ source: "wake", phraseMatched: false }), false);
-  assert.equal(shouldBeginListening({ source: "followup", phraseMatched: true }), false);
+  assert.equal(shouldBeginListening({ source: "followup", phraseMatched: true }), true);
   assert.equal(shouldBeginListening({ source: "manual", phraseMatched: false }), true);
 });
 
-test("the orb returns to passive after a finished turn instead of listening", () => {
+test("a closing phrase returns the orb to passive after the turn", () => {
   const done = {
     turnInProgress: true,
     sawBusy: true,

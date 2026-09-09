@@ -23,26 +23,28 @@ export function shouldArmWake(input: {
   );
 }
 
-/**
- * Automatic follow-up capture is disabled: listening starts only after
- * a confirmed wake word (or an explicit press of Start speaking).
- */
-export function shouldStartFollowup(_input: {
+export function shouldStartFollowup(input: {
   pendingFollowup: boolean;
   streaming: boolean;
   speaking: boolean;
   recording: boolean;
   transcribing: boolean;
 }): boolean {
-  return false;
+  return (
+    input.pendingFollowup &&
+    !input.streaming &&
+    !input.speaking &&
+    !input.recording &&
+    !input.transcribing
+  );
 }
 
 export function shouldBeginListening(input: {
   source: "wake" | "followup" | "manual";
   phraseMatched: boolean;
 }): boolean {
-  if (input.source === "followup") return false;
   if (input.source === "manual") return true;
+  if (input.source === "followup") return true;
   return input.phraseMatched;
 }
 

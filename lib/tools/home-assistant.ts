@@ -27,7 +27,7 @@ function serviceData(input: ToolInput): Record<string, unknown> | undefined {
 export const homeAssistantGetAreasTool: Tool = {
   name: "home_assistant.get_areas",
   description:
-    "List Home Assistant areas (rooms). Use the area name with update_entity, never an area_id.",
+    "List Home Assistant rooms by friendly name. kitchen and Kitchen are the same. Use the name with update_entity; never pass an area_id or ask about capitalisation.",
 
   async execute(_input: ToolInput, context: ToolContext): Promise<ToolResult> {
     const payload = await executeGetAreas(context.signal);
@@ -38,7 +38,7 @@ export const homeAssistantGetAreasTool: Tool = {
 export const homeAssistantGetEntitiesTool: Tool = {
   name: "home_assistant.get_entities",
   description:
-    "Discover Home Assistant entities. Optional filters: domain, area, search. Use this to find devices; use get_state for live state.",
+    "Discover Home Assistant devices. Returns friendly name, room, and an internal entity_id. Speak and search with the friendly name. Optional filters: domain, area, search.",
 
   async execute(input: ToolInput, context: ToolContext): Promise<ToolResult> {
     const payload = await executeGetEntities(
@@ -56,7 +56,7 @@ export const homeAssistantGetEntitiesTool: Tool = {
 export const homeAssistantGetStateTool: Tool = {
   name: "home_assistant.get_state",
   description:
-    "Read the current Home Assistant state for an entity. Prefer entity_id when known; otherwise pass name.",
+    "Read the current Home Assistant state. Prefer the friendly name; entity_id is internal only.",
 
   async execute(input: ToolInput, context: ToolContext): Promise<ToolResult> {
     const entityId = Array.isArray(input.entity_id)
@@ -93,7 +93,7 @@ export const homeAssistantCallServiceTool: Tool = {
 export const homeAssistantUpdateEntityTool: Tool = {
   name: "home_assistant.update_entity",
   description:
-    "Change Home Assistant entity registry metadata only: move an entity to an area or rename it. Pass the area name, never an area_id. Requires user confirmation before applying. Do not use this to turn devices on or off.",
+    "Move or rename a device using its friendly name, e.g. Hue Play 1. Pass the room as a normal name such as Kitchen; capitalisation does not matter. Never pass area_id or speak entity IDs to the user. Requires confirmation. Do not use this to turn devices on or off.",
 
   async execute(input: ToolInput, context: ToolContext): Promise<ToolResult> {
     const entityId = Array.isArray(input.entity_id)
@@ -143,8 +143,8 @@ export const HOME_ASSISTANT_TOOL_DEFINITIONS: ProviderToolDefinition[] = [
             type: "string",
             description: "Optional Home Assistant domain such as light, switch, or climate",
           },
-          area: { type: "string", description: "Optional area or room name filter" },
-          search: { type: "string", description: "Optional name or entity_id substring" },
+          area: { type: "string", description: "Optional room name filter. Case does not matter." },
+          search: { type: "string", description: "Optional friendly name substring, e.g. Hue Play 1" },
         },
       },
     },
@@ -157,8 +157,8 @@ export const HOME_ASSISTANT_TOOL_DEFINITIONS: ProviderToolDefinition[] = [
       parameters: {
         type: "object",
         properties: {
-          entity_id: { type: "string", description: "Home Assistant entity id, e.g. light.kitchen" },
-          name: { type: "string", description: "Friendly name when entity_id is unknown" },
+          entity_id: { type: "string", description: "Internal id if already known. Prefer name." },
+          name: { type: "string", description: "Friendly device name, e.g. Living Room Light" },
         },
       },
     },
@@ -174,10 +174,10 @@ export const HOME_ASSISTANT_TOOL_DEFINITIONS: ProviderToolDefinition[] = [
           domain: { type: "string", description: "Service domain, e.g. light" },
           service: { type: "string", description: "Service name, e.g. turn_off or turn_on" },
           entity_id: {
-            description: "Entity id or list of entity ids",
+            description: "Internal id if already known. Prefer name for spoken devices.",
             anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
           },
-          name: { type: "string", description: "Friendly name when entity_id is unknown" },
+          name: { type: "string", description: "Friendly device name, e.g. Hue Play 1" },
           service_data: {
             type: "object",
             description: "Optional service parameters such as brightness_pct",
@@ -197,15 +197,15 @@ export const HOME_ASSISTANT_TOOL_DEFINITIONS: ProviderToolDefinition[] = [
         properties: {
           entity_id: {
             type: "string",
-            description: "Entity id when known, e.g. light.hue_play_1. A friendly name is also accepted.",
+            description: "Optional internal id. Prefer search with the friendly name.",
           },
           search: {
             type: "string",
-            description: "Friendly name to resolve when entity_id is unknown",
+            description: "Friendly device name to move or rename, e.g. Hue Play 1",
           },
           area: {
             type: "string",
-            description: "Target Home Assistant area name, e.g. Kitchen. Do not pass area_id.",
+            description: "Target room name, e.g. Kitchen. Case does not matter. Do not pass area_id.",
           },
           name: {
             type: "string",

@@ -11,6 +11,7 @@ import {
   formatHomeAssistantCatalog,
   HomeAssistantError,
   getHomeAssistantCatalogStatus,
+  titleCaseAreaName,
   getPendingConfigurationById,
   isAffirmativeConfirmation,
   peekPendingConfiguration,
@@ -382,7 +383,7 @@ test("get_areas lists Home Assistant rooms by name", async () => {
   );
   assert.deepEqual(names.sort(), ["Kitchen", "Living Room", "Lounge"]);
   assert.ok(
-    (result.areas as Array<{ area_id?: string }>).every((area) => typeof area.area_id === "string"),
+    (result.areas as Array<{ area_id?: string }>).every((area) => area.area_id === undefined),
   );
   assertNoSecretLeak(result);
 });
@@ -404,6 +405,7 @@ test("catalogue prompt includes area names and joined entity rooms", () => {
   assert.match(text, /Hue Play 1/);
   assert.match(text, /\[Living Room\]/);
   assert.doesNotMatch(text, /living_room/);
+  assert.doesNotMatch(text, /light\.hue_play_1/);
 });
 
 test("get_state reads live state from Home Assistant", async () => {
@@ -560,9 +562,24 @@ test("high-risk actions are marked without blocking ordinary lights", () => {
 test("resolves Home Assistant areas case-insensitively and trims whitespace", () => {
   const kitchen = { area_id: "kitchen", name: "Kitchen" };
   const lounge = { area_id: "lounge", name: "Lounge" };
+  assert.equal(titleCaseAreaName("kitchen"), "Kitchen");
+  assert.equal(titleCaseAreaName("LIVING ROOM"), "Living Room");
   assert.equal(resolveAreas([kitchen, lounge], " kitchen ").status, "resolved");
   assert.equal(resolveAreas([kitchen, lounge], "KITCHEN").status, "resolved");
+  const resolved = resolveAreas([kitchen, lounge], "kitchen");
+  assert.equal(resolved.status, "resolved");
+  if (resolved.status === "resolved") assert.equal(resolved.area.name, "Kitchen");
   assert.equal(resolveAreas([kitchen, lounge], "Upstairs").status, "none");
+  assert.equal(
+    resolveAreas(
+      [
+        { area_id: "kitchen", name: "kitchen" },
+        { area_id: "kitchen_display", name: "Kitchen" },
+      ],
+      "kitchen",
+    ).status,
+    "resolved",
+  );
   assert.equal(
     resolveAreas(
       [
@@ -573,6 +590,20 @@ test("resolves Home Assistant areas case-insensitively and trims whitespace", ()
     ).status,
     "ambiguous",
   );
+});
+
+test("update_entity accepts a lowercase area and confirms with the friendly name", async () => {
+  const preview = await executeUpdateEntity(
+    { entity_id: "light.hue_play_1", area: "kitchen" },
+    { conversationId: "convo-name", requestId: "req-name" },
+  );
+  assert.equal(preview.ok, true);
+  assert.equal(preview.pending_confirmation, true);
+  assert.equal(preview.name, "Hue Play 1");
+  assert.deepEqual(preview.changes, {
+    area: { from: "Living Room", to: "Kitchen" },
+  });
+  assert.doesNotMatch(String(preview.message ?? ""), /light\.hue_play_1/);
 });
 
 test("update_entity previews an area move and does not write until confirmed", async () => {

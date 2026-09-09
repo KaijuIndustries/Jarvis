@@ -613,12 +613,29 @@ export function parseEntityRegistry(body: unknown): HaEntityRegistry | null {
   };
 }
 
+/** Title-case a spoken area so "kitchen" and "KITCHEN" both become "Kitchen". */
+export function titleCaseAreaName(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
 export function resolveAreas(areas: HaArea[], query: string): AreaResolveResult {
   const needle = query.trim().toLowerCase();
   if (!needle) return { status: "none" };
   const matches = areas.filter((area) => area.name.trim().toLowerCase() === needle);
   if (matches.length === 1) return { status: "resolved", area: matches[0] };
-  if (matches.length > 1) return { status: "ambiguous", matches };
+  if (matches.length > 1) {
+    const uniqueNames = new Set(matches.map((area) => area.name.trim()));
+    if (uniqueNames.size === 1) return { status: "ambiguous", matches };
+    const titled = titleCaseAreaName(query);
+    const preferred = matches.filter((area) => area.name.trim() === titled);
+    if (preferred.length === 1) return { status: "resolved", area: preferred[0] };
+    return { status: "ambiguous", matches };
+  }
   return { status: "none" };
 }
 
@@ -1055,7 +1072,6 @@ function scoreEntity(entity: CompactEntity, tokens: string[]): number {
 
 export function listingForLlm(entity: CompactEntity): Record<string, unknown> {
   const item: Record<string, unknown> = {
-    entity_id: entity.entity_id,
     name: entity.name,
     domain: entity.domain,
     state: entity.state,
@@ -1065,6 +1081,7 @@ export function listingForLlm(entity: CompactEntity): Record<string, unknown> {
   if (entity.attributes && Object.keys(entity.attributes).length > 0) {
     item.attributes = entity.attributes;
   }
+  item.entity_id = entity.entity_id;
   return item;
 }
 
@@ -1095,7 +1112,7 @@ export async function executeGetAreas(signal?: AbortSignal): Promise<HaToolPaylo
     return {
       success: true,
       count: areas.length,
-      areas: areas.map((area) => ({ name: area.name, area_id: area.area_id })),
+      areas: areas.map((area) => ({ name: area.name })),
     };
   } catch (error) {
     return toPayloadError(error);
@@ -1582,7 +1599,7 @@ async function prepareEntityUpdate(
   },
   signal?: AbortSignal,
 ): Promise<PreparedEntityUpdate | HaToolPayload> {
-  const areaName = typeof input.area === "string" ? input.area.trim() : "";
+  const areaName = typeof input.area === "string" ? titleCaseAreaName(input.area) : "";
   const nextName = input.name === undefined || input.name === null
     ? undefined
     : validateEntityName(String(input.name));
@@ -1841,19 +1858,19 @@ export function formatHomeAssistantCatalog(
   const useful = entities.filter((entity) => !SKIP_CATALOG_DOMAINS.has(entity.domain));
   const lines = useful.slice(0, 120).map((entity) => {
     const area = entity.area ? ` [${entity.area}]` : "";
-    return `- ${entity.name} — ${entity.entity_id} (${entity.domain})${area}`;
+    return `- ${entity.name}${area}`;
   });
   const areaLines = [...areas]
     .sort((left, right) => left.name.localeCompare(right.name))
     .map((area) => `- ${area.name}`);
   return [
-    "You can inspect and control the house through Home Assistant tools only. Home Assistant is the source of truth. Do not invent entity IDs or area names. For current device state, call home_assistant.get_state rather than guessing from this list or chat history. If several entities could match a request, ask which one. If the user says lights (plural), you may act on all matching lights. Never mention access tokens or internal APIs.",
-    "Home Assistant areas (use these exact names with update_entity; never pass area_id):",
+    "You can inspect and control the house through Home Assistant tools only. Home Assistant is the source of truth. Speak to the user with friendly device names only, never entity IDs. Area names are case-insensitive; treat kitchen and Kitchen as the same and never ask about capitalisation. For current device state, call home_assistant.get_state rather than guessing from this list or chat history. If several entities could match a request, ask which one using their friendly names. If the user says lights (plural), you may act on all matching lights. Never mention access tokens or internal APIs.",
+    "Home Assistant areas (pass these names to update_entity; capitalisation does not matter):",
     ...(areaLines.length > 0 ? areaLines : ["- (none loaded)"]),
-    "Discovered entities (names, IDs, and areas; not live state):",
+    "Discovered devices (friendly names and rooms; not live state):",
     ...lines,
   ].join("\n");
 }
 
 export const HOME_ASSISTANT_INSTRUCTIONS =
-  "You can inspect and control the house through Home Assistant tools. Home Assistant is the source of truth. Do not invent entity IDs or area names. Use home_assistant.get_areas to list rooms. Use home_assistant.get_entities to find devices; their area field is the current room. Use home_assistant.get_state for current state questions. Use home_assistant.call_service to turn devices on or off; that does not need confirmation. Use home_assistant.update_entity only to move an entity to an area or rename it. Pass the area name from get_areas, never an area_id. If update_entity returns pending_confirmation, explain the change in plain language and ask the user to confirm. Do not claim a move or rename happened unless the tool result says changed: true. If several entities or areas could match, ask which one. Never mention access tokens or internal APIs.";
+  "You can inspect and control the house through Home Assistant tools. Home Assistant is the source of truth. Always talk to the user with friendly names such as Hue Play 1, never entity IDs such as light.hue_play_1. You may use entity_id only as an internal tool argument. For moves and renames, pass the friendly name in search, not an entity_id. Area names are case-insensitive: kitchen, Kitchen, and KITCHEN are the same room. Never ask the user about capitalisation. Use home_assistant.get_areas to list rooms. Use home_assistant.get_entities to find devices; their name and area fields are what you should use. Use home_assistant.get_state for current state questions. Use home_assistant.call_service to turn devices on or off; that does not need confirmation. Use home_assistant.update_entity only to move a device to an area or rename it. Pass the area name, never an area_id. If update_entity returns pending_confirmation, explain the change in plain language using friendly names and ask the user to confirm. Do not claim a move or rename happened unless the tool result says changed: true. If several devices or rooms could match, ask which one by friendly name. Never mention access tokens or internal APIs.";
