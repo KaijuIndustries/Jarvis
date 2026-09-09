@@ -11,6 +11,7 @@ import {
 import { formatContextForPrompt } from "@/lib/context/prompt";
 import { selectContextForPrompt } from "@/lib/context/service";
 import {
+  fetchHomeAssistantAreas,
   formatHomeAssistantCatalog,
   getCachedEntities,
   HOME_ASSISTANT_INSTRUCTIONS,
@@ -119,6 +120,7 @@ async function withHomeAssistant(
     try {
       const catalog = formatHomeAssistantCatalog(
         await getCachedEntities({ signal }),
+        await fetchHomeAssistantAreas(signal).catch(() => []),
       );
       blocks.push({ role: "system", content: catalog });
     } catch {

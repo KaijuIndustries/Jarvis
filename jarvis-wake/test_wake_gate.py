@@ -1,6 +1,11 @@
 import unittest
 
-from wake_gate import WakeGate, friday_score, vad_gated_score
+from wake_gate import (
+    WakeGate,
+    friday_score,
+    should_reset_continuous_session,
+    vad_gated_score,
+)
 
 
 class WakeGateTests(unittest.TestCase):
@@ -63,6 +68,17 @@ class WakeGateTests(unittest.TestCase):
     def test_friday_score_ignores_other_models(self) -> None:
         self.assertEqual(friday_score({"hey_jarvis": 0.99, "noise": 1.0}), 0.0)
         self.assertAlmostEqual(friday_score({"hey_friday": 0.73}), 0.73)
+
+    def test_continuous_session_resets_after_interval_when_idle(self) -> None:
+        self.assertFalse(
+            should_reset_continuous_session(0.0, 44.9, interval=45.0, streak=0)
+        )
+        self.assertTrue(
+            should_reset_continuous_session(0.0, 45.0, interval=45.0, streak=0)
+        )
+        self.assertFalse(
+            should_reset_continuous_session(0.0, 60.0, interval=45.0, streak=1)
+        )
 
 
 if __name__ == "__main__":

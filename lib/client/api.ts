@@ -14,6 +14,13 @@ export type OllamaSettingsStatus = {
   source: "environment" | "server" | null;
 };
 
+export type HomeAssistantCatalogStatus = {
+  configured: boolean;
+  entityCount: number | null;
+  areaCount: number | null;
+  refreshedAt: number | null;
+};
+
 export async function fetchModels(): Promise<{
   models: ModelInfo[];
   error?: string;
@@ -349,4 +356,23 @@ export async function clearOllamaApiKey(): Promise<OllamaSettingsStatus> {
     throw new Error("Failed to clear API key");
   }
   return (await response.json()) as OllamaSettingsStatus;
+}
+
+export async function fetchHomeAssistantCatalog(): Promise<HomeAssistantCatalogStatus> {
+  const response = await fetch("/api/settings/home-assistant", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Failed to load Home Assistant settings");
+  }
+  return (await response.json()) as HomeAssistantCatalogStatus;
+}
+
+export async function refreshHomeAssistantCatalog(): Promise<HomeAssistantCatalogStatus> {
+  const response = await fetch("/api/settings/home-assistant", { method: "POST" });
+  const data = (await response.json()) as HomeAssistantCatalogStatus & {
+    error?: string;
+  };
+  if (!response.ok) {
+    throw new Error(data.error ?? "Failed to refresh Home Assistant catalogue");
+  }
+  return data;
 }

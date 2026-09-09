@@ -5,19 +5,18 @@ import {
   ORB_COMMAND_PREROLL_MS,
   ORB_COMMAND_SILENCE_MS,
   ORB_COMMAND_WAIT_MS,
-  ORB_FOLLOWUP_MS,
   shouldArmWake,
-  shouldStartFollowup,
+  shouldBeginListening,
+  shouldReturnToPassive,
   type OrbMicMode,
 } from "@/lib/voice/orb-turn";
-import { shouldExpectFollowup } from "@/lib/voice/closing-phrase";
 import type { useVoiceCapture } from "./useVoiceCapture";
 
 type Voice = ReturnType<typeof useVoiceCapture>;
 
 /**
- * Hands-free orb turn: wake → command capture → follow-up, without
- * treating the wake phrase itself as a chat message.
+ * Hands-free orb turn: confirmed wake → command capture → passive.
+ * Listening never auto-starts after a reply.
  */
 export function useOrbTurnMachine(input: {
   voice: Voice;
@@ -28,8 +27,7 @@ export function useOrbTurnMachine(input: {
 }) {
   const [mode, setMode] = useState<OrbMicMode>("passive");
   const consumedRef = useRef(false);
-  const expectFollowupRef = useRef(false);
-  const closeAfterTurnRef = useRef(false);
+  const turnInProgressRef = useRef(false);
   const sawBusyRef = useRef(false);
   const modeRef = useRef<OrbMicMode>("passive");
   const startCapture = input.voice.start;
@@ -42,15 +40,19 @@ export function useOrbTurnMachine(input: {
     setMode(next);
   }, []);
 
+  const resetTurnFlags = useCallback(() => {
+    consumedRef.current = false;
+    turnInProgressRef.current = false;
+    sawBusyRef.current = false;
+  }, []);
+
   const beginCommand = useCallback(
     (waitForSpeechMs: number) => {
       if (input.voice.recording || input.voice.transcribing || input.streaming || input.speaking) {
         return;
       }
       pauseWake();
-      consumedRef.current = false;
-      expectFollowupRef.current = false;
-      closeAfterTurnRef.current = false;
+      resetTurnFlags();
       setMicMode("command");
       void startCapture({
         autoStop: true,
@@ -67,40 +69,24 @@ export function useOrbTurnMachine(input: {
       input.voice.recording,
       input.voice.transcribing,
       pauseWake,
+      resetTurnFlags,
       setMicMode,
       startCapture,
     ],
   );
 
   const onWake = useCallback(() => {
+    if (
+      !shouldBeginListening({
+        source: "wake",
+        phraseMatched: true,
+      })
+    ) {
+      return;
+    }
     if (modeRef.current !== "passive") return;
     beginCommand(ORB_COMMAND_WAIT_MS);
   }, [beginCommand]);
-
-  const beginFollowup = useCallback(() => {
-    if (input.voice.recording || input.voice.transcribing || input.streaming || input.speaking) {
-      return;
-    }
-    pauseWake();
-    consumedRef.current = false;
-    setMicMode("followup");
-    void startCapture({
-      autoStop: true,
-      waitForSpeechMs: ORB_FOLLOWUP_MS,
-      prerollMs: 120,
-      silenceMs: ORB_COMMAND_SILENCE_MS,
-    }).then((started) => {
-      if (!started) setMicMode("passive");
-    });
-  }, [
-    input.speaking,
-    input.streaming,
-    input.voice.recording,
-    input.voice.transcribing,
-    pauseWake,
-    setMicMode,
-    startCapture,
-  ]);
 
   const handleUtterance = useCallback(
     (text: string | null) => {
@@ -108,66 +94,48 @@ export function useOrbTurnMachine(input: {
       if (trimmed) {
         if (consumedRef.current) return;
         consumedRef.current = true;
-        const wantsFollowup = shouldExpectFollowup(trimmed);
-        expectFollowupRef.current = wantsFollowup;
-        closeAfterTurnRef.current = !wantsFollowup;
+        turnInProgressRef.current = true;
         sawBusyRef.current = false;
         void sendMessage(trimmed).catch(() => {
-          expectFollowupRef.current = false;
-          closeAfterTurnRef.current = false;
-          sawBusyRef.current = false;
+          resetTurnFlags();
           setMicMode("passive");
         });
         return;
       }
 
-      expectFollowupRef.current = false;
-      closeAfterTurnRef.current = false;
-      sawBusyRef.current = false;
+      resetTurnFlags();
       setMicMode("passive");
     },
-    [sendMessage, setMicMode],
+    [resetTurnFlags, sendMessage, setMicMode],
   );
 
   useEffect(() => {
     if (input.streaming || input.speaking) {
-      if (expectFollowupRef.current || closeAfterTurnRef.current) {
+      if (turnInProgressRef.current) {
         sawBusyRef.current = true;
       }
       return;
     }
     if (
-      shouldStartFollowup({
-        pendingFollowup: expectFollowupRef.current && sawBusyRef.current,
+      shouldReturnToPassive({
+        turnInProgress: turnInProgressRef.current,
+        sawBusy: sawBusyRef.current,
         streaming: input.streaming,
         speaking: input.speaking,
         recording: input.voice.recording,
         transcribing: input.voice.transcribing,
       })
     ) {
-      expectFollowupRef.current = false;
-      closeAfterTurnRef.current = false;
-      sawBusyRef.current = false;
-      const timer = window.setTimeout(() => beginFollowup(), 0);
-      return () => window.clearTimeout(timer);
-    }
-    if (
-      closeAfterTurnRef.current &&
-      sawBusyRef.current &&
-      !input.voice.recording &&
-      !input.voice.transcribing
-    ) {
-      closeAfterTurnRef.current = false;
-      sawBusyRef.current = false;
+      resetTurnFlags();
       const timer = window.setTimeout(() => setMicMode("passive"), 0);
       return () => window.clearTimeout(timer);
     }
   }, [
-    beginFollowup,
     input.speaking,
     input.streaming,
     input.voice.recording,
     input.voice.transcribing,
+    resetTurnFlags,
     setMicMode,
   ]);
 
@@ -180,14 +148,19 @@ export function useOrbTurnMachine(input: {
   });
 
   const startManual = useCallback(() => {
-    expectFollowupRef.current = false;
-    closeAfterTurnRef.current = false;
-    sawBusyRef.current = false;
-    consumedRef.current = false;
+    if (
+      !shouldBeginListening({
+        source: "manual",
+        phraseMatched: false,
+      })
+    ) {
+      return;
+    }
+    resetTurnFlags();
     pauseWake();
     setMicMode("command");
     void startCapture();
-  }, [pauseWake, setMicMode, startCapture]);
+  }, [pauseWake, resetTurnFlags, setMicMode, startCapture]);
 
   const stopManual = useCallback(() => {
     void input.voice.stop();

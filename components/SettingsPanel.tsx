@@ -3,8 +3,11 @@
 import { useEffect, useState } from "react";
 import {
   clearOllamaApiKey,
+  fetchHomeAssistantCatalog,
   fetchOllamaSettings,
+  refreshHomeAssistantCatalog,
   saveOllamaApiKey,
+  type HomeAssistantCatalogStatus,
   type OllamaSettingsStatus,
 } from "@/lib/client/api";
 
@@ -12,11 +15,30 @@ type SettingsPanelProps = {
   onClose: () => void;
 };
 
+function catalogSummary(catalog: HomeAssistantCatalogStatus | null): string {
+  if (!catalog) return "Loading catalogue status…";
+  if (!catalog.configured) return "Home Assistant is not configured.";
+  if (catalog.entityCount == null && catalog.areaCount == null) {
+    return "No catalogue loaded yet. Refresh to pull the current entities and areas.";
+  }
+  const entities = catalog.entityCount ?? 0;
+  const areas = catalog.areaCount ?? 0;
+  const when = catalog.refreshedAt
+    ? new Date(catalog.refreshedAt).toLocaleTimeString()
+    : null;
+  return when
+    ? `${entities} entities, ${areas} areas. Last refresh ${when}.`
+    : `${entities} entities, ${areas} areas.`;
+}
+
 export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [status, setStatus] = useState<OllamaSettingsStatus | null>(null);
+  const [catalog, setCatalog] = useState<HomeAssistantCatalogStatus | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -26,6 +48,13 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       })
       .catch(() => {
         if (!cancelled) setError("Could not load settings");
+      });
+    void fetchHomeAssistantCatalog()
+      .then((next) => {
+        if (!cancelled) setCatalog(next);
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogError("Could not load Home Assistant settings");
       });
     return () => {
       cancelled = true;
@@ -60,6 +89,20 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   }
 
+  async function refreshCatalog() {
+    setRefreshing(true);
+    setCatalogError(null);
+    try {
+      setCatalog(await refreshHomeAssistantCatalog());
+    } catch (cause) {
+      setCatalogError(
+        cause instanceof Error ? cause.message : "Refresh failed",
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-4 pt-[12vh]">
       <button
@@ -69,7 +112,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         onClick={onClose}
       />
       <section
-        className="relative z-10 w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-panel"
+        className="relative z-10 max-h-[80vh] w-full max-w-md overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-panel"
         role="dialog"
         aria-labelledby="settings-title"
       >
@@ -144,6 +187,26 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           )}
         </p>
         {error ? <p className="mt-2 text-[12px] text-err">{error}</p> : null}
+
+        <div className="mt-5 border-t border-border pt-4">
+          <h3 className="text-[13px] font-medium">Home Assistant</h3>
+          <p className="mt-1 text-[12px] leading-5 text-muted">
+            Jarvis keeps a short-lived list of entities and areas. Refresh it
+            when Home Assistant no longer matches what Jarvis thinks is there.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refreshCatalog()}
+            disabled={refreshing || catalog?.configured === false}
+            className="mt-3 rounded-md bg-accent px-3 py-1.5 text-[13px] text-background disabled:opacity-40"
+          >
+            {refreshing ? "Refreshing…" : "Refresh entities and areas"}
+          </button>
+          <p className="mt-3 text-[12px] text-muted">{catalogSummary(catalog)}</p>
+          {catalogError ? (
+            <p className="mt-2 text-[12px] text-err">{catalogError}</p>
+          ) : null}
+        </div>
       </section>
     </div>
   );

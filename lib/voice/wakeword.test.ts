@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolveOrbState } from "../../components/resolveOrbState.ts";
-import { isWakeDetection, parseWakeAudioResult, WAKE_PHRASE } from "./wakeword.ts";
+import {
+  isAcceptedWake,
+  isWakeDetection,
+  parseWakeAudioResult,
+  WAKE_PHRASE,
+} from "./wakeword.ts";
 
 test("accepts a Hey Friday wake event", () => {
   const event = { type: "wake", phrase: WAKE_PHRASE, score: 0.91 };
@@ -30,10 +35,21 @@ test("rejects a different wake phrase instead of rewriting it", () => {
     isWakeDetection({ type: "wake", phrase: "Hey Jarvis", score: 0.99 }),
     false,
   );
+  assert.equal(
+    isAcceptedWake({ type: "wake", phrase: "Hey Jarvis", score: 0.99 }),
+    false,
+  );
   assert.deepEqual(
     parseWakeAudioResult({ type: "wake", phrase: "Hey Jarvis" }),
     { type: "ok" },
   );
+});
+
+test("listening is not armed by a low-score or mismatched wake payload", () => {
+  assert.equal(isAcceptedWake({ type: "wake", phrase: WAKE_PHRASE, score: 0.91 }), true);
+  assert.equal(isAcceptedWake({ type: "wake", phrase: WAKE_PHRASE, score: 0.49 }), false);
+  assert.equal(isAcceptedWake({ type: "ok" }), false);
+  assert.equal(isAcceptedWake({ type: "wake", phrase: "Hey Friday", score: "high" }), false);
 });
 
 test("maps error payloads without dropping the text chat path", () => {

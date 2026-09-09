@@ -1,5 +1,6 @@
 import {
   executeCallService,
+  executeGetAreas,
   executeGetEntities,
   executeGetState,
   executeUpdateEntity,
@@ -22,6 +23,17 @@ function serviceData(input: ToolInput): Record<string, unknown> | undefined {
     ? input.service_data
     : undefined;
 }
+
+export const homeAssistantGetAreasTool: Tool = {
+  name: "home_assistant.get_areas",
+  description:
+    "List Home Assistant areas (rooms). Use the area name with update_entity, never an area_id.",
+
+  async execute(_input: ToolInput, context: ToolContext): Promise<ToolResult> {
+    const payload = await executeGetAreas(context.signal);
+    return toResult("home_assistant.get_areas", payload);
+  },
+};
 
 export const homeAssistantGetEntitiesTool: Tool = {
   name: "home_assistant.get_entities",
@@ -108,6 +120,17 @@ export const homeAssistantUpdateEntityTool: Tool = {
 };
 
 export const HOME_ASSISTANT_TOOL_DEFINITIONS: ProviderToolDefinition[] = [
+  {
+    type: "function",
+    function: {
+      name: "home_assistant.get_areas",
+      description: homeAssistantGetAreasTool.description,
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
   {
     type: "function",
     function: {

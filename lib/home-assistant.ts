@@ -159,6 +159,7 @@ export type HaToolPayload = {
   count?: number;
   truncated?: boolean;
   entities?: unknown;
+  areas?: unknown;
   matches?: Array<{ entity_id: string; name: string }>;
   candidates?: Array<{
     entity_id?: string;
@@ -452,12 +453,22 @@ export async function callHomeAssistantService(
   return Array.isArray(result) ? result : result;
 }
 
-export async function fetchHomeAssistantAreas(signal?: AbortSignal): Promise<HaArea[]> {
+export async function fetchHomeAssistantAreas(
+  signal?: AbortSignal,
+  force = false,
+): Promise<HaArea[]> {
   const now = Date.now();
-  if (areaCache && now - areaCache.fetchedAt < cacheTtlMs()) {
+  if (!force && areaCache && now - areaCache.fetchedAt < cacheTtlMs()) {
     return areaCache.areas;
   }
-  if (areaInFlight) return areaInFlight;
+  if (areaInFlight) {
+    if (!force) return areaInFlight;
+    try {
+      await areaInFlight;
+    } catch {
+      // Fetch a fresh list after the in-flight request settles.
+    }
+  }
   areaInFlight = (async () => {
     const body = await haRequest<unknown>("/config/area_registry/list", { signal });
     const areas = parseAreaList(body);
@@ -471,7 +482,14 @@ export async function fetchHomeAssistantAreas(signal?: AbortSignal): Promise<HaA
 
 export async function refreshHomeAssistantAreas(signal?: AbortSignal): Promise<HaArea[]> {
   areaCache = null;
-  return fetchHomeAssistantAreas(signal);
+  return fetchHomeAssistantAreas(signal, true);
+}
+
+export async function fetchEntityRegistryList(
+  signal?: AbortSignal,
+): Promise<HaEntityRegistry[]> {
+  const body = await haRequest<unknown>("/config/entity_registry/list", { signal });
+  return parseEntityRegistryList(body);
 }
 
 export async function fetchEntityRegistryEntry(
@@ -542,6 +560,24 @@ export function parseAreaList(body: unknown): HaArea[] {
       return { area_id: areaId, name };
     })
     .filter((area): area is HaArea => Boolean(area));
+}
+
+export function parseEntityRegistryList(body: unknown): HaEntityRegistry[] {
+  const raw = Array.isArray(body)
+    ? body
+    : body && typeof body === "object"
+      ? ((body as { result?: unknown }).result ??
+        (body as { entities?: unknown }).entities)
+      : null;
+  if (!Array.isArray(raw)) {
+    throw new HomeAssistantError(
+      "invalid_response",
+      "Home Assistant returned an invalid entity registry list",
+    );
+  }
+  return raw
+    .map((item) => parseEntityRegistry(item))
+    .filter((entry): entry is HaEntityRegistry => Boolean(entry));
 }
 
 export function parseEntityRegistry(body: unknown): HaEntityRegistry | null {
@@ -660,6 +696,54 @@ function invalidateDiscoveryCaches(): void {
   areaCache = null;
 }
 
+export type HomeAssistantCatalogStatus = {
+  configured: boolean;
+  entityCount: number | null;
+  areaCount: number | null;
+  refreshedAt: number | null;
+};
+
+export function getHomeAssistantCatalogStatus(): HomeAssistantCatalogStatus {
+  const entityAt = entityCache?.fetchedAt ?? null;
+  const areaAt = areaCache?.fetchedAt ?? null;
+  const refreshedAt =
+    entityAt != null && areaAt != null
+      ? Math.min(entityAt, areaAt)
+      : (entityAt ?? areaAt);
+  return {
+    configured: isHomeAssistantConfigured(),
+    entityCount: entityCache ? entityCache.entities.length : null,
+    areaCount: areaCache ? areaCache.areas.length : null,
+    refreshedAt,
+  };
+}
+
+export async function refreshHomeAssistantCatalog(
+  signal?: AbortSignal,
+): Promise<HomeAssistantCatalogStatus> {
+  if (!isHomeAssistantConfigured()) {
+    throw new HomeAssistantError(
+      "not_configured",
+      "Home Assistant is not configured",
+    );
+  }
+  const pending = [cacheInFlight, areaInFlight].filter(
+    (value) => value != null,
+  );
+  if (pending.length > 0) {
+    await Promise.allSettled(pending);
+  }
+  invalidateDiscoveryCaches();
+  const entities = await getCachedEntities({ force: true, signal });
+  const areas = await fetchHomeAssistantAreas(signal);
+  return {
+    configured: true,
+    entityCount: entities.length,
+    areaCount: areas.length,
+    refreshedAt: Date.now(),
+  };
+}
+
 export function compactEntity(state: HaState): CompactEntity | null {
   const entityId = state.entity_id?.trim() ?? "";
   if (!ENTITY_ID_RE.test(entityId)) return null;
@@ -711,19 +795,52 @@ export async function getCachedEntities(options?: {
     return entityCache.entities;
   }
   if (cacheInFlight) {
-    return cacheInFlight;
+    if (!options?.force) return cacheInFlight;
+    try {
+      await cacheInFlight;
+    } catch {
+      // Fetch a fresh catalogue after the in-flight request settles.
+    }
   }
   cacheInFlight = (async () => {
     const states = await fetchHomeAssistantStates(options?.signal);
-    const entities = states
-      .map((state) => compactEntity(state))
-      .filter((entity): entity is CompactEntity => entity !== null);
+    const [areas, registry] = await Promise.all([
+      fetchHomeAssistantAreas(options?.signal, Boolean(options?.force)).catch(
+        () => areaCache?.areas ?? [],
+      ),
+      fetchEntityRegistryList(options?.signal).catch(() => []),
+    ]);
+    const entities = applyEntityAreas(
+      states
+        .map((state) => compactEntity(state))
+        .filter((entity): entity is CompactEntity => entity !== null),
+      registry,
+      areas,
+    );
     entityCache = { fetchedAt: Date.now(), entities };
     return entities;
   })().finally(() => {
     cacheInFlight = null;
   });
   return cacheInFlight;
+}
+
+export function applyEntityAreas(
+  entities: CompactEntity[],
+  registry: HaEntityRegistry[],
+  areas: HaArea[],
+): CompactEntity[] {
+  const areaNameById = new Map(areas.map((area) => [area.area_id, area.name]));
+  const areaIdByEntity = new Map<string, string>();
+  for (const entry of registry) {
+    if (entry.area_id) areaIdByEntity.set(entry.entity_id, entry.area_id);
+  }
+  return entities.map((entity) => {
+    const areaId = areaIdByEntity.get(entity.entity_id);
+    const joined = areaId ? areaNameById.get(areaId) : undefined;
+    if (!joined) return entity;
+    return { ...entity, area: joined };
+  });
 }
 
 export async function refreshHomeAssistantEntities(signal?: AbortSignal): Promise<CompactEntity[]> {
@@ -967,6 +1084,22 @@ function toPayloadError(error: unknown): HaToolPayload {
     return toolError("timeout", { message: "Home Assistant request was cancelled" });
   }
   return toolError("http_error", { message: "Home Assistant request failed" });
+}
+
+export async function executeGetAreas(signal?: AbortSignal): Promise<HaToolPayload> {
+  if (!isHomeAssistantConfigured()) {
+    return toolError("not_configured", { message: "Home Assistant is not configured" });
+  }
+  try {
+    const areas = await refreshHomeAssistantAreas(signal);
+    return {
+      success: true,
+      count: areas.length,
+      areas: areas.map((area) => ({ name: area.name, area_id: area.area_id })),
+    };
+  } catch (error) {
+    return toPayloadError(error);
+  }
 }
 
 export async function executeGetEntities(
@@ -1701,18 +1834,26 @@ function toUpdateError(error: unknown): HaToolPayload {
   });
 }
 
-export function formatHomeAssistantCatalog(entities: CompactEntity[]): string {
+export function formatHomeAssistantCatalog(
+  entities: CompactEntity[],
+  areas: HaArea[] = [],
+): string {
   const useful = entities.filter((entity) => !SKIP_CATALOG_DOMAINS.has(entity.domain));
   const lines = useful.slice(0, 120).map((entity) => {
     const area = entity.area ? ` [${entity.area}]` : "";
     return `- ${entity.name} — ${entity.entity_id} (${entity.domain})${area}`;
   });
+  const areaLines = [...areas]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((area) => `- ${area.name}`);
   return [
-    "You can inspect and control the house through Home Assistant tools only. Home Assistant is the source of truth. Do not invent entity IDs. For current device state, call home_assistant.get_state rather than guessing from this list or chat history. If several entities could match a request, ask which one. If the user says lights (plural), you may act on all matching lights. Never mention access tokens or internal APIs.",
-    "Discovered entities (names and IDs only; not live state):",
+    "You can inspect and control the house through Home Assistant tools only. Home Assistant is the source of truth. Do not invent entity IDs or area names. For current device state, call home_assistant.get_state rather than guessing from this list or chat history. If several entities could match a request, ask which one. If the user says lights (plural), you may act on all matching lights. Never mention access tokens or internal APIs.",
+    "Home Assistant areas (use these exact names with update_entity; never pass area_id):",
+    ...(areaLines.length > 0 ? areaLines : ["- (none loaded)"]),
+    "Discovered entities (names, IDs, and areas; not live state):",
     ...lines,
   ].join("\n");
 }
 
 export const HOME_ASSISTANT_INSTRUCTIONS =
-  "You can inspect and control the house through Home Assistant tools. Home Assistant is the source of truth. Do not invent entity IDs. Use home_assistant.get_state for current state questions. Use home_assistant.call_service to turn devices on or off; that does not need confirmation. Use home_assistant.update_entity only to move an entity to an area or rename it. Pass the area name, never an area_id. If update_entity returns pending_confirmation, explain the change in plain language and ask the user to confirm. Do not claim a move or rename happened unless the tool result says changed: true. If several entities or areas could match, ask which one. Never mention access tokens or internal APIs.";
+  "You can inspect and control the house through Home Assistant tools. Home Assistant is the source of truth. Do not invent entity IDs or area names. Use home_assistant.get_areas to list rooms. Use home_assistant.get_entities to find devices; their area field is the current room. Use home_assistant.get_state for current state questions. Use home_assistant.call_service to turn devices on or off; that does not need confirmation. Use home_assistant.update_entity only to move an entity to an area or rename it. Pass the area name from get_areas, never an area_id. If update_entity returns pending_confirmation, explain the change in plain language and ask the user to confirm. Do not claim a move or rename happened unless the tool result says changed: true. If several entities or areas could match, ask which one. Never mention access tokens or internal APIs.";

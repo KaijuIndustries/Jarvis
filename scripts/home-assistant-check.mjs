@@ -132,6 +132,10 @@ async function main() {
       );
       return;
     }
+    case "registry-list": {
+      printJson(await haFetch("/config/entity_registry/list"));
+      return;
+    }
     case "registry": {
       const entityId = rest[0];
       if (!entityId) {
@@ -187,6 +191,7 @@ async function main() {
   node scripts/home-assistant-check.mjs areas
   node scripts/home-assistant-check.mjs state <entity_id>
   node scripts/home-assistant-check.mjs registry <entity_id>
+  node scripts/home-assistant-check.mjs registry-list
   node scripts/home-assistant-check.mjs call <domain> <service> <entity_id>
   node scripts/home-assistant-check.mjs update-entity <entity_id> <area> [--name <new_name>]`);
       process.exit(1);

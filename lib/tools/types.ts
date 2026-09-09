@@ -1,5 +1,6 @@
 export const HOME_ASSISTANT_TOOLS = [
   "home_assistant.get_entities",
+  "home_assistant.get_areas",
   "home_assistant.get_state",
   "home_assistant.call_service",
   "home_assistant.update_entity",

@@ -78,3 +78,16 @@ def friday_score(scores: dict) -> float:
 def vad_gated_score(score: float, speech: bool) -> float:
     """openWakeWord zeros wake scores when Silero VAD does not see speech."""
     return score if speech else 0.0
+
+
+def should_reset_continuous_session(
+    last_reset: float,
+    now: float,
+    *,
+    interval: float,
+    streak: int,
+) -> bool:
+    """Reset the detector after a long stream so scores cannot drift into a wake."""
+    if streak > 0:
+        return False
+    return now - last_reset >= interval

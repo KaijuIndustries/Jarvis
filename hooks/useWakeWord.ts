@@ -9,7 +9,7 @@ import {
   PCM_RATE,
   resampleInt16Mono,
 } from "@/lib/voice/pcm";
-import { WAKE_PHRASE } from "@/lib/voice/wakeword";
+import { isAcceptedWake } from "@/lib/voice/wakeword";
 import type { MicrophoneSession } from "./useMicrophoneSession";
 
 type CaptureNodes = {
@@ -113,8 +113,8 @@ export function useWakeWord(input: {
             if (batch.length === 0) continue;
             const result = await sendWakeAudio(sessionId, copyPcm(batch), abort.signal);
             if (abortRef.current !== abort) return;
-            if (result.type === "wake" && result.phrase === WAKE_PHRASE) {
-              console.log("Wake word detected:", result);
+            if (sessionIdRef.current !== sessionId) return;
+            if (isAcceptedWake(result)) {
               onWakeRef.current();
             } else if (result.type === "error") {
               setStreamStatus("unavailable");

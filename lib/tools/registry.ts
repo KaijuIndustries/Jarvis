@@ -1,6 +1,7 @@
 import { modelHasTool } from "./access";
 import {
   homeAssistantCallServiceTool,
+  homeAssistantGetAreasTool,
   homeAssistantGetEntitiesTool,
   homeAssistantGetStateTool,
   homeAssistantUpdateEntityTool,
@@ -11,6 +12,7 @@ import { webSearchTool } from "./web-search";
 
 const tools: Record<ToolName, Tool> = {
   web_search: webSearchTool,
+  "home_assistant.get_areas": homeAssistantGetAreasTool,
   "home_assistant.get_entities": homeAssistantGetEntitiesTool,
   "home_assistant.get_state": homeAssistantGetStateTool,
   "home_assistant.call_service": homeAssistantCallServiceTool,

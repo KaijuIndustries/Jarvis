@@ -156,9 +156,7 @@ export function OrbMode() {
               ? "Thinking..."
               : speech.speaking
                 ? "Speaking..."
-                : turn.mode === "followup"
-                  ? "Listening..."
-                  : wake.status === "unavailable"
+                : wake.status === "unavailable"
                     ? wake.error ?? "Wake word unavailable"
                     : "";
 

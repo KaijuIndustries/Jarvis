@@ -23,15 +23,40 @@ export function shouldArmWake(input: {
   );
 }
 
-export function shouldStartFollowup(input: {
+/**
+ * Automatic follow-up capture is disabled: listening starts only after
+ * a confirmed wake word (or an explicit press of Start speaking).
+ */
+export function shouldStartFollowup(_input: {
   pendingFollowup: boolean;
   streaming: boolean;
   speaking: boolean;
   recording: boolean;
   transcribing: boolean;
 }): boolean {
+  return false;
+}
+
+export function shouldBeginListening(input: {
+  source: "wake" | "followup" | "manual";
+  phraseMatched: boolean;
+}): boolean {
+  if (input.source === "followup") return false;
+  if (input.source === "manual") return true;
+  return input.phraseMatched;
+}
+
+export function shouldReturnToPassive(input: {
+  turnInProgress: boolean;
+  sawBusy: boolean;
+  streaming: boolean;
+  speaking: boolean;
+  recording: boolean;
+  transcribing: boolean;
+}): boolean {
   return (
-    input.pendingFollowup &&
+    input.turnInProgress &&
+    input.sawBusy &&
     !input.streaming &&
     !input.speaking &&
     !input.recording &&

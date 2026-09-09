@@ -4,14 +4,19 @@ import {
   actionRisk,
   checkHomeAssistantAuth,
   executeCallService,
+  executeGetAreas,
   executeGetEntities,
   executeGetState,
   executeUpdateEntity,
+  formatHomeAssistantCatalog,
+  HomeAssistantError,
+  getHomeAssistantCatalogStatus,
   getPendingConfigurationById,
   isAffirmativeConfirmation,
   peekPendingConfiguration,
   PENDING_CONFIGURATION_TTL_MS,
   redactSecrets,
+  refreshHomeAssistantCatalog,
   resetHomeAssistantCacheForTests,
   resolveAreas,
   resolveEntities,
@@ -256,6 +261,9 @@ const mockFetch: typeof fetch = async (input, init) => {
   if (url === `${BASE}/api/config/area_registry/list` && method === "GET") {
     return jsonResponse(areas);
   }
+  if (url === `${BASE}/api/config/entity_registry/list` && method === "GET") {
+    return jsonResponse(Object.values(registry));
+  }
   const registryMatch = url.match(/\/api\/config\/entity_registry\/([^/?]+)$/);
   if (registryMatch && method === "GET") {
     const entityId = decodeURIComponent(registryMatch[1] ?? "");
@@ -334,15 +342,68 @@ test("authenticates to Home Assistant with a bearer token and never logs it", as
 });
 
 test("get_entities returns a compact discovery list", async () => {
-  const result = await executeGetEntities({ domain: "light", search: "living" });
+  const result = await executeGetEntities({ domain: "light", search: "living room light" });
   assert.equal(result.success, true);
   const entities = result.entities as Array<Record<string, unknown>>;
   assert.equal(entities.length, 1);
   assert.equal(entities[0]?.entity_id, "light.living_room");
   assert.equal(entities[0]?.name, "Living Room Light");
   assert.equal(entities[0]?.domain, "light");
+  assert.equal(entities[0]?.area, "Living Room");
   assert.ok(!JSON.stringify(result).includes("context"));
   assertNoSecretLeak(result);
+});
+
+test("get_entities joins registry areas so room filters work", async () => {
+  const kitchen = await executeGetEntities({ domain: "light", area: "Kitchen" });
+  assert.equal(kitchen.success, true);
+  const kitchenIds = (kitchen.entities as Array<{ entity_id?: string }>).map(
+    (entity) => entity.entity_id,
+  );
+  assert.deepEqual(kitchenIds.sort(), [
+    "light.kitchen",
+    "light.kitchen_pendant",
+    "light.kitchen_under_cabinet",
+  ]);
+  const living = await executeGetEntities({ domain: "light", area: "Living Room" });
+  const livingIds = (living.entities as Array<{ entity_id?: string }>).map(
+    (entity) => entity.entity_id,
+  );
+  assert.ok(livingIds.includes("light.hue_play_1"));
+  assert.ok(livingIds.includes("light.living_room"));
+});
+
+test("get_areas lists Home Assistant rooms by name", async () => {
+  const result = await executeGetAreas();
+  assert.equal(result.success, true);
+  assert.equal(result.count, 3);
+  const names = (result.areas as Array<{ name?: string; area_id?: string }>).map(
+    (area) => area.name,
+  );
+  assert.deepEqual(names.sort(), ["Kitchen", "Living Room", "Lounge"]);
+  assert.ok(
+    (result.areas as Array<{ area_id?: string }>).every((area) => typeof area.area_id === "string"),
+  );
+  assertNoSecretLeak(result);
+});
+
+test("catalogue prompt includes area names and joined entity rooms", () => {
+  const text = formatHomeAssistantCatalog(
+    [
+      {
+        entity_id: "light.hue_play_1",
+        name: "Hue Play 1",
+        domain: "light",
+        state: "on",
+        area: "Living Room",
+      },
+    ],
+    [{ area_id: "living_room", name: "Living Room" }],
+  );
+  assert.match(text, /Living Room/);
+  assert.match(text, /Hue Play 1/);
+  assert.match(text, /\[Living Room\]/);
+  assert.doesNotMatch(text, /living_room/);
 });
 
 test("get_state reads live state from Home Assistant", async () => {
@@ -780,6 +841,57 @@ test("update_entity maps Home Assistant rejection, malformed responses, and time
     { conversationId: "convo-3", requestId: "req-6" },
   );
   assert.equal(failed.error, "timeout");
+});
+
+test("manual catalogue refresh fails closed when Home Assistant is not configured", async () => {
+  delete process.env.HOME_ASSISTANT_URL;
+  delete process.env.HOME_ASSISTANT_TOKEN;
+  await assert.rejects(
+    () => refreshHomeAssistantCatalog(),
+    (error: unknown) =>
+      error instanceof HomeAssistantError && error.code === "not_configured",
+  );
+  assert.equal(getHomeAssistantCatalogStatus().configured, false);
+});
+
+test("manual catalogue refresh replaces the cached entities and areas", async () => {
+  const empty = getHomeAssistantCatalogStatus();
+  assert.equal(empty.configured, true);
+  assert.equal(empty.entityCount, null);
+  assert.equal(empty.areaCount, null);
+
+  const first = await refreshHomeAssistantCatalog();
+  assert.equal(first.configured, true);
+  assert.equal(first.entityCount, 6);
+  assert.equal(first.areaCount, 3);
+  assert.equal(typeof first.refreshedAt, "number");
+  assert.equal(getHomeAssistantCatalogStatus().entityCount, 6);
+
+  states["light.office"] = haState("light.office", "Office Light", "off");
+  areas.push({ area_id: "office", name: "Office" });
+  registry["light.office"] = {
+    entity_id: "light.office",
+    name: null,
+    original_name: "Office Light",
+    area_id: "office",
+  };
+
+  const stale = await executeGetEntities({});
+  const staleIds = (stale.entities as Array<{ entity_id?: string }>).map(
+    (entity) => entity.entity_id,
+  );
+  assert.equal(staleIds.includes("light.office"), false);
+  assert.equal(getHomeAssistantCatalogStatus().entityCount, 6);
+  assert.equal(getHomeAssistantCatalogStatus().areaCount, 3);
+
+  const refreshed = await refreshHomeAssistantCatalog();
+  assert.equal(refreshed.entityCount, 7);
+  assert.equal(refreshed.areaCount, 4);
+  const live = await executeGetEntities({ domain: "light", search: "office" });
+  assert.equal(live.success, true);
+  assert.equal((live.entities as Array<{ entity_id?: string; area?: string }>)[0]?.entity_id, "light.office");
+  assert.equal((live.entities as Array<{ area?: string }>)[0]?.area, "Office");
+  assertNoSecretLeak(refreshed);
 });
 
 test("ordinary call_service is unaffected by a pending configuration action", async () => {

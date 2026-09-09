@@ -14,12 +14,13 @@ from typing import Any
 
 import numpy as np
 
-from wake_gate import WakeGate, friday_score
+from wake_gate import WakeGate, friday_score, should_reset_continuous_session
 
 PHRASE = "Hey Friday"
 FRAME_SAMPLES = 1280
 MAX_BODY_BYTES = 32 * 1024
 SESSION_IDLE_SECONDS = 60.0
+SESSION_RESET_SECONDS = 45.0
 DEFAULT_THRESHOLD = 0.5
 DEFAULT_CONFIRM_FRAMES = 2
 DEFAULT_VAD_THRESHOLD = 0.5
@@ -76,6 +77,7 @@ class WakeRuntime:
         self.session_id = ""
         self.pending = np.zeros(0, dtype=np.int16)
         self.last_seen = time.monotonic()
+        self.last_reset = self.last_seen
 
     def reset_session(self, session_id: str) -> None:
         self.session_id = session_id
@@ -83,6 +85,7 @@ class WakeRuntime:
         self.gate.reset_streak()
         self.model.reset()
         self.last_seen = time.monotonic()
+        self.last_reset = self.last_seen
 
     def feed(self, session_id: str, pcm: bytes) -> dict[str, Any]:
         if not session_id:
@@ -99,6 +102,15 @@ class WakeRuntime:
                 self.reset_session(session_id)
             elif now - self.last_seen > SESSION_IDLE_SECONDS:
                 self.reset_session(session_id)
+            elif should_reset_continuous_session(
+                self.last_reset,
+                now,
+                interval=SESSION_RESET_SECONDS,
+                streak=self.gate.streak,
+            ):
+                leftover = self.pending
+                self.reset_session(session_id)
+                self.pending = leftover
             self.last_seen = now
             self.pending = np.concatenate([self.pending, samples])
 
