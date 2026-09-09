@@ -17,11 +17,16 @@ type PlaybackNodes = {
   analyser: AnalyserNode;
   raf: number;
   ownedContext: AudioContext | null;
+  context: AudioContext;
 };
 
 /**
  * Plays Piper WAV through the existing Orb AudioContext when possible,
  * and writes the same audioRef bands the microphone analyser uses.
+ *
+ * Ollama text is the producer; this hook is the FIFO speech consumer.
+ * Sentences can be queued while a previous sentence is still synthesising
+ * or playing. Only one Piper request and one playback run at a time.
  */
 export function useOrbSpeech(input: {
   audioRef: MutableRefObject<OrbAudioSource>;
@@ -32,8 +37,29 @@ export function useOrbSpeech(input: {
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const nodesRef = useRef<PlaybackNodes | null>(null);
+  const queueRef = useRef<string[]>([]);
+  const producerDoneRef = useRef(true);
+  const reportErrorsRef = useRef(false);
+  const waitRef = useRef<(() => void) | null>(null);
+  const playbackFinishedRef = useRef(Promise.resolve());
   const audioRef = input.audioRef;
   const playbackContext = input.context;
+
+  const stopSource = useCallback(() => {
+    const nodes = nodesRef.current;
+    if (!nodes) return;
+    try {
+      nodes.source.onended = null;
+      nodes.source.stop();
+    } catch {
+      // Already stopped.
+    }
+    try {
+      nodes.source.disconnect();
+    } catch {
+      // Already disconnected.
+    }
+  }, []);
 
   const detach = useCallback(() => {
     const nodes = nodesRef.current;
@@ -62,107 +88,221 @@ export function useOrbSpeech(input: {
     resetOrbAudio(audioRef.current);
   }, [audioRef]);
 
+  const kick = useCallback(() => {
+    const wait = waitRef.current;
+    waitRef.current = null;
+    wait?.();
+  }, []);
+
   const stop = useCallback(() => {
     generationRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
+    queueRef.current = [];
+    producerDoneRef.current = true;
+    playbackFinishedRef.current = Promise.resolve();
+    kick();
     detach();
     setSpeaking(false);
-  }, [detach]);
+  }, [detach, kick]);
+
+  const startPlayback = useCallback(
+    (buffer: AudioBuffer, generation: number, owned: AudioContext | null, context: AudioContext) => {
+      return new Promise<void>((resolve) => {
+        if (generationRef.current !== generation) {
+          if (owned && nodesRef.current?.ownedContext !== owned) void owned.close();
+          resolve();
+          return;
+        }
+
+        const existing = nodesRef.current;
+        if (existing) stopSource();
+
+        const analyser = existing?.analyser ?? context.createAnalyser();
+        if (!existing) {
+          analyser.fftSize = ORB_FFT_SIZE;
+          analyser.smoothingTimeConstant = 0.72;
+          analyser.connect(context.destination);
+        }
+
+        const source = context.createBufferSource();
+        source.buffer = buffer;
+        source.connect(analyser);
+
+        const nodes: PlaybackNodes = {
+          source,
+          analyser,
+          raf: existing?.raf ?? 0,
+          ownedContext: existing?.ownedContext ?? owned,
+          context,
+        };
+        nodesRef.current = nodes;
+
+        if (!existing) {
+          const freq = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
+          const time = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+          const smooth = { ...EMPTY_ORB_AUDIO };
+          const tick = () => {
+            const current = nodesRef.current;
+            if (!current || current.analyser !== analyser) return;
+            const next = readOrbBands(current.analyser, context.sampleRate, freq, time);
+            writeOrbAudio(audioRef.current, next, smooth);
+            current.raf = requestAnimationFrame(tick);
+          };
+          nodes.raf = requestAnimationFrame(tick);
+        }
+
+        source.onended = () => {
+          resolve();
+        };
+        setSpeaking(true);
+        source.start();
+      });
+    },
+    [audioRef, stopSource],
+  );
+
+  const playWav = useCallback(
+    async (wav: Blob, generation: number) => {
+      const existingContext = nodesRef.current?.context ?? playbackContext;
+      const owned = existingContext ? null : createPlaybackContext();
+      const context = existingContext ?? owned;
+      if (!context) {
+        throw new Error("Web Audio is not available in this browser.");
+      }
+
+      try {
+        if (context.state === "suspended") {
+          await context.resume();
+        }
+        if (generationRef.current !== generation) return;
+
+        const buffer = await context.decodeAudioData(await wav.arrayBuffer());
+        if (generationRef.current !== generation) return;
+
+        await playbackFinishedRef.current;
+        if (generationRef.current !== generation) return;
+
+        playbackFinishedRef.current = startPlayback(buffer, generation, owned, context);
+      } finally {
+        if (owned && nodesRef.current?.ownedContext !== owned) {
+          void owned.close();
+        }
+      }
+    },
+    [playbackContext, startPlayback],
+  );
+
+  const waitForWork = useCallback((generation: number) => {
+    if (generationRef.current !== generation) return Promise.resolve();
+    if (queueRef.current.length > 0 || producerDoneRef.current) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      waitRef.current = resolve;
+      if (queueRef.current.length > 0 || producerDoneRef.current) {
+        waitRef.current = null;
+        resolve();
+      }
+    });
+  }, []);
+
+  const runConsumer = useCallback(
+    async (generation: number) => {
+      while (generationRef.current === generation) {
+        const sentence = queueRef.current.shift();
+        if (sentence !== undefined) {
+          try {
+            const abort = abortRef.current;
+            const wav = await synthesizeSpeech(sentence, abort?.signal);
+            if (generationRef.current !== generation) return;
+            await playWav(wav, generation);
+          } catch (cause) {
+            if (generationRef.current !== generation) return;
+            if (cause instanceof DOMException && cause.name === "AbortError") return;
+            if (cause instanceof Error && cause.message === "The request was cancelled.") {
+              return;
+            }
+            console.error("Orb speech skipped a sentence:", cause);
+            if (reportErrorsRef.current) {
+              setError(
+                cause instanceof Error && cause.message
+                  ? cause.message
+                  : "Speech synthesis failed.",
+              );
+            }
+          }
+          continue;
+        }
+        if (producerDoneRef.current) break;
+        await waitForWork(generation);
+      }
+
+      if (generationRef.current !== generation) return;
+      await playbackFinishedRef.current;
+      if (generationRef.current !== generation) return;
+      detach();
+      setSpeaking(false);
+    },
+    [detach, playWav, waitForWork],
+  );
+
+  const startSpeechQueue = useCallback(
+    (options?: { reportErrors?: boolean }) => {
+      generationRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = new AbortController();
+      queueRef.current = [];
+      producerDoneRef.current = false;
+      reportErrorsRef.current = Boolean(options?.reportErrors);
+      playbackFinishedRef.current = Promise.resolve();
+      kick();
+      detach();
+      setError(null);
+      setSpeaking(false);
+      void runConsumer(generationRef.current);
+    },
+    [detach, kick, runConsumer],
+  );
+
+  const queueSentence = useCallback(
+    (text: string) => {
+      const trimmed = text.replace(/\s+/g, " ").trim();
+      if (!trimmed) return;
+      queueRef.current.push(trimmed);
+      setSpeaking(true);
+      kick();
+    },
+    [kick],
+  );
+
+  const finishSpeechQueue = useCallback(() => {
+    producerDoneRef.current = true;
+    kick();
+  }, [kick]);
 
   const speak = useCallback(
     async (text: string) => {
       const trimmed = text.replace(/\s+/g, " ").trim();
       if (!trimmed) return;
-
-      const generation = generationRef.current + 1;
-      generationRef.current = generation;
-      abortRef.current?.abort();
-      detach();
-      setError(null);
-
-      const abort = new AbortController();
-      abortRef.current = abort;
-
-      try {
-        const wav = await synthesizeSpeech(trimmed, abort.signal);
-        if (generationRef.current !== generation) return;
-
-        const existing = playbackContext;
-        const owned = existing ? null : createPlaybackContext();
-        const context = existing ?? owned;
-        if (!context) {
-          throw new Error("Web Audio is not available in this browser.");
-        }
-        if (context.state === "suspended") {
-          await context.resume();
-        }
-        if (generationRef.current !== generation) {
-          if (owned) void owned.close();
-          return;
-        }
-
-        const buffer = await context.decodeAudioData(await wav.arrayBuffer());
-        if (generationRef.current !== generation) {
-          if (owned) void owned.close();
-          return;
-        }
-
-        const source = context.createBufferSource();
-        const analyser = context.createAnalyser();
-        analyser.fftSize = ORB_FFT_SIZE;
-        analyser.smoothingTimeConstant = 0.72;
-        source.buffer = buffer;
-        source.connect(analyser);
-        analyser.connect(context.destination);
-
-        const freq = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
-        const time = new Uint8Array(new ArrayBuffer(analyser.fftSize));
-        const smooth = { ...EMPTY_ORB_AUDIO };
-        const nodes: PlaybackNodes = {
-          source,
-          analyser,
-          raf: 0,
-          ownedContext: owned,
-        };
-        nodesRef.current = nodes;
-
-        const tick = () => {
-          if (nodesRef.current !== nodes) return;
-          const next = readOrbBands(analyser, context.sampleRate, freq, time);
-          writeOrbAudio(audioRef.current, next, smooth);
-          nodes.raf = requestAnimationFrame(tick);
-        };
-        nodes.raf = requestAnimationFrame(tick);
-
-        source.onended = () => {
-          if (generationRef.current !== generation) return;
-          detach();
-          setSpeaking(false);
-        };
-
-        setSpeaking(true);
-        source.start();
-      } catch (cause) {
-        if (generationRef.current !== generation) return;
-        if (cause instanceof DOMException && cause.name === "AbortError") return;
-        detach();
-        setSpeaking(false);
-        setError(
-          cause instanceof Error && cause.message
-            ? cause.message
-            : "Speech synthesis failed.",
-        );
-      } finally {
-        if (abortRef.current === abort) abortRef.current = null;
-      }
+      startSpeechQueue({ reportErrors: true });
+      queueSentence(trimmed);
+      finishSpeechQueue();
     },
-    [audioRef, detach, playbackContext],
+    [finishSpeechQueue, queueSentence, startSpeechQueue],
   );
 
   useEffect(() => stop, [stop]);
 
-  return { speaking, error, speak, stop };
+  return {
+    speaking,
+    error,
+    speak,
+    stop,
+    startSpeechQueue,
+    queueSentence,
+    finishSpeechQueue,
+  };
 }
 
 function createPlaybackContext(): AudioContext | null {

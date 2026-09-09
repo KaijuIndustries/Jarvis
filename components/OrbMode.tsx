@@ -9,6 +9,7 @@ import { useOrbSpeech } from "@/hooks/useOrbSpeech";
 import { useVoiceCapture } from "@/hooks/useVoiceCapture";
 import { EMPTY_ORB_AUDIO } from "@/lib/client/audio-bands";
 import { fetchHealth } from "@/lib/client/api";
+import { SentenceBuffer } from "@/lib/voice/sentence-buffer";
 import { resolveOrbState } from "./resolveOrbState";
 
 /**
@@ -40,8 +41,12 @@ export function OrbMode() {
     audioRef,
     suppressWrites: speech.speaking,
   });
-  const pendingSpeakRef = useRef(false);
-  const speak = speech.speak;
+  const speechTurnRef = useRef<"idle" | "streaming">("idle");
+  const spokenReplyRef = useRef("");
+  const sentenceBufferRef = useRef(new SentenceBuffer());
+  const startSpeechQueue = speech.startSpeechQueue;
+  const queueSentence = speech.queueSentence;
+  const finishSpeechQueue = speech.finishSpeechQueue;
   const stopSpeech = speech.stop;
 
   const state = resolveOrbState({
@@ -56,23 +61,47 @@ export function OrbMode() {
 
   useEffect(() => {
     if (voice.recording || voice.transcribing) {
-      pendingSpeakRef.current = false;
+      speechTurnRef.current = "idle";
+      spokenReplyRef.current = "";
+      sentenceBufferRef.current.reset();
       stopSpeech();
       return;
     }
-    if (chat.streaming) {
-      pendingSpeakRef.current = true;
-      stopSpeech();
-      return;
+
+    if (chat.streaming && speechTurnRef.current !== "streaming") {
+      speechTurnRef.current = "streaming";
+      spokenReplyRef.current = "";
+      sentenceBufferRef.current.reset();
+      startSpeechQueue();
     }
-    if (!pendingSpeakRef.current) return;
-    pendingSpeakRef.current = false;
-    const text = chat.reply.trim();
-    if (text) void speak(text);
+
+    if (speechTurnRef.current === "streaming") {
+      const previous = spokenReplyRef.current;
+      const reply = chat.reply;
+      if (reply.startsWith(previous)) {
+        const delta = reply.slice(previous.length);
+        spokenReplyRef.current = reply;
+        if (delta) {
+          for (const sentence of sentenceBufferRef.current.push(delta)) {
+            queueSentence(sentence);
+          }
+        }
+      }
+
+      if (!chat.streaming) {
+        speechTurnRef.current = "idle";
+        for (const sentence of sentenceBufferRef.current.flush()) {
+          queueSentence(sentence);
+        }
+        finishSpeechQueue();
+      }
+    }
   }, [
     chat.reply,
     chat.streaming,
-    speak,
+    finishSpeechQueue,
+    queueSentence,
+    startSpeechQueue,
     stopSpeech,
     voice.recording,
     voice.transcribing,

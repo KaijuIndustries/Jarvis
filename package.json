@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start --hostname 0.0.0.0 --port 3000",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test lib/context/prompt.test.ts lib/ai/server-time.test.ts lib/voice/pcm.test.ts lib/voice/wyoming.test.ts lib/voice/piper.test.ts",
+    "test": "node --experimental-strip-types --test lib/context/prompt.test.ts lib/ai/server-time.test.ts lib/voice/pcm.test.ts lib/voice/wyoming.test.ts lib/voice/piper.test.ts lib/voice/sentence-buffer.test.ts",
     "migrate": "node scripts/migrate.mjs",
     "migrate:status": "node scripts/migrate.mjs --status",
     "db:migrate": "node scripts/migrate.mjs",
