@@ -7,6 +7,7 @@ import { useMicrophoneSession } from "@/hooks/useMicrophoneSession";
 import { useOrbChat } from "@/hooks/useOrbChat";
 import { useOrbSpeech } from "@/hooks/useOrbSpeech";
 import { useVoiceCapture } from "@/hooks/useVoiceCapture";
+import { useWakeWord } from "@/hooks/useWakeWord";
 import { EMPTY_ORB_AUDIO } from "@/lib/client/audio-bands";
 import { fetchHealth } from "@/lib/client/api";
 import { SentenceBuffer } from "@/lib/voice/sentence-buffer";
@@ -37,6 +38,14 @@ export function OrbMode() {
     audioRef,
     context: session.context,
   });
+  const wake = useWakeWord({
+    session,
+    suppress:
+      voice.recording ||
+      voice.transcribing ||
+      chat.streaming ||
+      speech.speaking,
+  });
   useMicrophoneAnalyser(session, {
     audioRef,
     suppressWrites: speech.speaking,
@@ -56,6 +65,7 @@ export function OrbMode() {
     recording: voice.recording,
     transcribing: voice.transcribing,
     speaking: speech.speaking,
+    wakeListening: wake.listening,
     voiceError: Boolean(session.error || voice.error || chat.error),
   });
 
@@ -106,6 +116,12 @@ export function OrbMode() {
     voice.recording,
     voice.transcribing,
   ]);
+
+  useEffect(() => {
+    void session.start();
+    // The session object identity changes; start() is the stable entry point.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- auto-request mic once on /orb
+  }, [session.start]);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,6 +210,17 @@ export function OrbMode() {
                 {statusText}
               </p>
             ) : null}
+            <p className="text-[10px] tracking-wide text-white/30">
+              {wake.status === "detected"
+                ? "Wake word: detected"
+                : wake.status === "listening"
+                  ? "Wake word: listening"
+                  : wake.status === "unavailable"
+                    ? wake.error
+                      ? `Wake word: unavailable (${wake.error})`
+                      : "Wake word: unavailable"
+                    : "Wake word: off"}
+            </p>
           </div>
         </div>
       ) : null}

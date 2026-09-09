@@ -36,6 +36,11 @@ export const serverConfig = {
     { host: "127.0.0.1", port: 10200 },
   ),
   wyomingPiperVoice: readEnv("WYOMING_PIPER_VOICE", "en_GB-alba-medium"),
+  ...parseNamedHostPort(
+    "wakeword",
+    readEnv("WAKEWORD_URL", "127.0.0.1:10400"),
+    { host: "127.0.0.1", port: 10400 },
+  ),
 } as const;
 
 function parseNamedHostPort<Prefix extends string>(

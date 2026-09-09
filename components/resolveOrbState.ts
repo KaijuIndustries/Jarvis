@@ -11,6 +11,7 @@ export function resolveOrbState(input: {
   recording?: boolean;
   transcribing?: boolean;
   speaking?: boolean;
+  wakeListening?: boolean;
   voiceError?: boolean;
 }): OrbState {
   if (input.voiceError) return "error";
@@ -18,5 +19,6 @@ export function resolveOrbState(input: {
   if (input.transcribing || input.streaming) return "thinking";
   if (input.recording) return "listening";
   if (input.speaking) return "speaking";
+  if (input.wakeListening) return "listening";
   return "idle";
 }

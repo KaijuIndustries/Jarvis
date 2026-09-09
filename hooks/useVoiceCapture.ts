@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { transcribeUtterance } from "@/lib/client/api";
 import { resampleFloat32 } from "@/lib/client/microphone";
+import { ensurePcmWorklet, PCM_WORKLET_NAME } from "@/lib/client/pcm-worklet";
 import {
   float32ToInt16,
   int16ToBytes,
@@ -13,22 +14,6 @@ import {
   PCM_WIDTH,
 } from "@/lib/voice/pcm";
 import type { MicrophoneSession } from "./useMicrophoneSession";
-
-const WORKLET_URL = "/audio/pcm-capture-processor.js";
-const WORKLET_NAME = "pcm-capture";
-
-const workletReady = new WeakMap<AudioContext, Promise<void>>();
-
-function ensureWorklet(context: AudioContext): Promise<void> {
-  const existing = workletReady.get(context);
-  if (existing) return existing;
-  if (!context.audioWorklet) {
-    return Promise.reject(new Error("This browser cannot capture raw microphone audio."));
-  }
-  const pending = context.audioWorklet.addModule(WORKLET_URL);
-  workletReady.set(context, pending);
-  return pending;
-}
 
 function concatFloat32(chunks: Float32Array[]): Float32Array {
   let total = 0;
@@ -207,7 +192,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
     chunksRef.current = [];
 
     try {
-      await ensureWorklet(session.context);
+      await ensurePcmWorklet(session.context);
     } catch {
       setError("This browser cannot capture raw microphone audio.");
       return;
@@ -220,7 +205,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
 
     try {
       const source = session.context.createMediaStreamSource(session.stream);
-      const node = new AudioWorkletNode(session.context, WORKLET_NAME, {
+      const node = new AudioWorkletNode(session.context, PCM_WORKLET_NAME, {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         channelCount: 1,

@@ -1,0 +1,30 @@
+services:
+  jarvis-wake:
+    build:
+      context: .
+      dockerfile: jarvis-wake/Dockerfile
+    image: jarvis-wake:local
+    container_name: jarvis-wake
+    ports:
+      - "127.0.0.1:10400:10400"
+    environment:
+      WAKEWORD_MODEL: /app/models/hey_friday.onnx
+      WAKEWORD_HOST: 0.0.0.0
+      WAKEWORD_PORT: "10400"
+      WAKEWORD_THRESHOLD: "0.5"
+      WAKEWORD_COOLDOWN: "3"
+    volumes:
+      - ./models/hey_friday.onnx:/app/models/hey_friday.onnx:ro
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:10400/health')",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 40s

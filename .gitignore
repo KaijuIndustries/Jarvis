@@ -34,6 +34,11 @@ yarn-error.log*
 .env*
 !.env.example
 
+# python
+__pycache__/
+*.py[cod]
+.venv/
+
 # server-side secrets written by Settings
 /data/
 

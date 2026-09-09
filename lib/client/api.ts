@@ -4,6 +4,10 @@ import type {
   ModelInfo,
   ProviderHealth,
 } from "@/lib/ai";
+import {
+  parseWakeAudioResult,
+  type WakeAudioResult,
+} from "@/lib/voice/wakeword";
 
 export type OllamaSettingsStatus = {
   configured: boolean;
@@ -280,6 +284,61 @@ export async function transcribeUtterance(
 
   const data = (await response.json()) as { text?: string; error?: string };
   return { text: typeof data.text === "string" ? data.text : "" };
+}
+
+export async function fetchWakeHealth(): Promise<{
+  ok: boolean;
+  phrase?: string;
+  error?: string;
+}> {
+  try {
+    const response = await fetch("/api/voice/wake", { cache: "no-store" });
+    const data = (await response.json()) as {
+      ok?: boolean;
+      phrase?: string;
+      error?: string;
+    };
+    return {
+      ok: Boolean(data.ok),
+      phrase: data.phrase,
+      error: data.error,
+    };
+  } catch {
+    return { ok: false, error: "Wake-word service is unavailable." };
+  }
+}
+
+export async function sendWakeAudio(
+  sessionId: string,
+  pcm: ArrayBuffer,
+  signal?: AbortSignal,
+): Promise<WakeAudioResult> {
+  let response: Response;
+  try {
+    response = await fetch("/api/voice/wake", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Jarvis-Wake-Session": sessionId,
+      },
+      body: pcm,
+      cache: "no-store",
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The request was cancelled.");
+    }
+    throw new Error("Wake-word service is unavailable.");
+  }
+
+  const data: unknown = await response.json().catch(() => ({ type: "ok" }));
+  const parsed = parseWakeAudioResult(data);
+  if (!response.ok && parsed.type !== "wake") {
+    if (parsed.type === "error") return parsed;
+    return { type: "error", error: "Wake-word service is unavailable." };
+  }
+  return parsed;
 }
 
 export async function clearOllamaApiKey(): Promise<OllamaSettingsStatus> {
