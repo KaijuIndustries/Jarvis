@@ -121,12 +121,74 @@ async function main() {
       printJson({ ok: true, action: `${domain}.${service}`, result: changed });
       return;
     }
+    case "areas": {
+      const areas = await haFetch("/config/area_registry/list");
+      const rows = Array.isArray(areas) ? areas : areas?.result ?? areas?.areas ?? [];
+      printJson(
+        (Array.isArray(rows) ? rows : []).map((area) => ({
+          area_id: area.area_id,
+          name: area.name,
+        })),
+      );
+      return;
+    }
+    case "registry": {
+      const entityId = rest[0];
+      if (!entityId) {
+        console.error("Usage: node scripts/home-assistant-check.mjs registry <entity_id>");
+        process.exit(1);
+      }
+      printJson(await haFetch(`/config/entity_registry/${encodeURIComponent(entityId)}`));
+      return;
+    }
+    case "update-entity": {
+      const entityId = rest[0];
+      const area = rest[1];
+      const nameFlag = rest.indexOf("--name");
+      const name = nameFlag >= 0 ? rest[nameFlag + 1] : undefined;
+      if (!entityId || (!area && !name)) {
+        console.error(
+          "Usage: node scripts/home-assistant-check.mjs update-entity <entity_id> <area> [--name <new_name>]",
+        );
+        console.error("This command mutates Home Assistant entity registry metadata.");
+        process.exit(1);
+      }
+      const body = { entity_id: entityId };
+      if (area && area !== "--name") {
+        const areas = await haFetch("/config/area_registry/list");
+        const rows = Array.isArray(areas) ? areas : areas?.result ?? areas?.areas ?? [];
+        const needle = area.trim().toLowerCase();
+        const matches = (Array.isArray(rows) ? rows : []).filter(
+          (item) => String(item.name ?? "").trim().toLowerCase() === needle,
+        );
+        if (matches.length === 0) {
+          throw new Error(`No Home Assistant area named ${area} was found.`);
+        }
+        if (matches.length > 1) {
+          throw new Error(`Several Home Assistant areas match ${area}.`);
+        }
+        body.area_id = matches[0].area_id;
+      }
+      if (name) body.name = name;
+      printJson({
+        ok: true,
+        mutated: true,
+        result: await haFetch("/config/entity_registry/update", {
+          method: "POST",
+          body,
+        }),
+      });
+      return;
+    }
     default: {
       console.error(`Usage:
   node scripts/home-assistant-check.mjs auth
   node scripts/home-assistant-check.mjs entities
+  node scripts/home-assistant-check.mjs areas
   node scripts/home-assistant-check.mjs state <entity_id>
-  node scripts/home-assistant-check.mjs call <domain> <service> <entity_id>`);
+  node scripts/home-assistant-check.mjs registry <entity_id>
+  node scripts/home-assistant-check.mjs call <domain> <service> <entity_id>
+  node scripts/home-assistant-check.mjs update-entity <entity_id> <area> [--name <new_name>]`);
       process.exit(1);
     }
   }

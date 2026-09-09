@@ -2,6 +2,7 @@ export const HOME_ASSISTANT_TOOLS = [
   "home_assistant.get_entities",
   "home_assistant.get_state",
   "home_assistant.call_service",
+  "home_assistant.update_entity",
 ] as const;
 
 export type HomeAssistantToolName = (typeof HOME_ASSISTANT_TOOLS)[number];
@@ -11,6 +12,8 @@ export type ToolName = "web_search" | HomeAssistantToolName;
 export type ToolContext = {
   model: string;
   signal?: AbortSignal;
+  conversationId?: string;
+  requestId?: string;
 };
 
 export type ToolResult = {
@@ -30,6 +33,9 @@ export type ToolInput = {
   search?: string;
   service?: string;
   service_data?: Record<string, unknown>;
+  confirm?: boolean;
+  confirmation_id?: string;
+  unsupported_fields?: string[];
 };
 
 export interface Tool {

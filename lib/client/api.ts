@@ -39,6 +39,7 @@ export async function streamChat(params: {
   model: string;
   messages: ChatMessage[];
   signal: AbortSignal;
+  conversationId?: string;
   onChunk: (chunk: ChatStreamChunk) => void;
 }): Promise<void> {
   const response = await fetch("/api/chat", {
@@ -47,6 +48,7 @@ export async function streamChat(params: {
     body: JSON.stringify({
       model: params.model,
       messages: params.messages,
+      conversationId: params.conversationId,
     }),
     signal: params.signal,
   });

@@ -2,6 +2,7 @@ import {
   executeCallService,
   executeGetEntities,
   executeGetState,
+  executeUpdateEntity,
   type HaToolPayload,
 } from "@/lib/home-assistant";
 import type { ProviderToolDefinition } from "@/lib/ai/types";
@@ -77,6 +78,35 @@ export const homeAssistantCallServiceTool: Tool = {
   },
 };
 
+export const homeAssistantUpdateEntityTool: Tool = {
+  name: "home_assistant.update_entity",
+  description:
+    "Change Home Assistant entity registry metadata only: move an entity to an area or rename it. Pass the area name, never an area_id. Requires user confirmation before applying. Do not use this to turn devices on or off.",
+
+  async execute(input: ToolInput, context: ToolContext): Promise<ToolResult> {
+    const entityId = Array.isArray(input.entity_id)
+      ? input.entity_id
+      : input.entity_id;
+    const payload = await executeUpdateEntity(
+      {
+        entity_id: entityId,
+        name: input.name,
+        area: input.area,
+        search: input.search ?? input.query,
+        confirm: input.confirm,
+        confirmation_id: input.confirmation_id,
+        unsupported_fields: input.unsupported_fields,
+      },
+      {
+        signal: context.signal,
+        conversationId: context.conversationId,
+        requestId: context.requestId,
+      },
+    );
+    return toResult("home_assistant.update_entity", payload);
+  },
+};
+
 export const HOME_ASSISTANT_TOOL_DEFINITIONS: ProviderToolDefinition[] = [
   {
     type: "function",
@@ -131,6 +161,34 @@ export const HOME_ASSISTANT_TOOL_DEFINITIONS: ProviderToolDefinition[] = [
           },
         },
         required: ["domain", "service"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "home_assistant.update_entity",
+      description: homeAssistantUpdateEntityTool.description,
+      parameters: {
+        type: "object",
+        properties: {
+          entity_id: {
+            type: "string",
+            description: "Entity id when known, e.g. light.hue_play_1. A friendly name is also accepted.",
+          },
+          search: {
+            type: "string",
+            description: "Friendly name to resolve when entity_id is unknown",
+          },
+          area: {
+            type: "string",
+            description: "Target Home Assistant area name, e.g. Kitchen. Do not pass area_id.",
+          },
+          name: {
+            type: "string",
+            description: "New friendly name. This is the rename value, not the lookup name.",
+          },
+        },
       },
     },
   },

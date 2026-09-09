@@ -7,7 +7,8 @@ test("detects home control and device state questions", () => {
   assert.equal(queryNeedsHomeAssistant("Set the bedroom light to 30 percent."), true);
   assert.equal(queryNeedsHomeAssistant("Is the kitchen light on?"), true);
   assert.equal(queryNeedsHomeAssistant("What lights do I have downstairs?"), true);
-  assert.equal(queryNeedsHomeAssistant("turn on the hallway lamp"), true);
+  assert.equal(queryNeedsHomeAssistant("Move Hue Play 1 to the Kitchen."), true);
+  assert.equal(queryNeedsHomeAssistant("Rename Hue Play 1 to Kitchen Lamp"), true);
 });
 
 test("ignores unrelated conversation", () => {

@@ -6,6 +6,26 @@
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_CACHE_MS = 12 * 60 * 1000;
 const MAX_SERVICE_DATA_BYTES = 2_000;
+const MAX_ENTITY_NAME_LENGTH = 64;
+export const PENDING_CONFIGURATION_TTL_MS = 2 * 60 * 1000;
+const UNSUPPORTED_UPDATE_FIELDS = new Set([
+  "area_id",
+  "device_id",
+  "platform",
+  "integration",
+  "unique_id",
+  "disabled_by",
+  "hidden_by",
+  "new_entity_id",
+  "aliases",
+  "icon",
+  "labels",
+  "categories",
+  "options",
+  "url",
+  "method",
+  "path",
+]);
 const SKIP_CATALOG_DOMAINS = new Set([
   "update",
   "sun",
@@ -132,7 +152,7 @@ export type HaToolPayload = {
   state?: string;
   area?: string;
   action?: string;
-  risk?: "normal" | "high";
+  risk?: "normal" | "high" | "configuration";
   attributes?: Record<string, string | number | boolean>;
   last_changed?: string;
   last_updated?: string;
@@ -140,6 +160,21 @@ export type HaToolPayload = {
   truncated?: boolean;
   entities?: unknown;
   matches?: Array<{ entity_id: string; name: string }>;
+  candidates?: Array<{
+    entity_id?: string;
+    name: string;
+    area?: string;
+    area_id?: string;
+  }>;
+  fields?: string[];
+  ok?: boolean;
+  changed?: boolean;
+  pending_confirmation?: boolean;
+  confirmation_id?: string;
+  changes?: {
+    area?: { from: string | null; to: string };
+    name?: { from: string; to: string };
+  };
 };
 
 export type EntityResolveResult =
@@ -155,11 +190,49 @@ type HaState = {
   last_updated?: string;
 };
 
+export type HaArea = {
+  area_id: string;
+  name: string;
+};
+
+export type AreaResolveResult =
+  | { status: "resolved"; area: HaArea }
+  | { status: "ambiguous"; matches: HaArea[] }
+  | { status: "none" };
+
+type HaEntityRegistry = {
+  entity_id: string;
+  name?: string | null;
+  original_name?: string | null;
+  area_id?: string | null;
+};
+
+export type PendingConfigurationAction = {
+  id: string;
+  conversationId: string;
+  requestId: string;
+  tool: "home_assistant.update_entity";
+  createdAt: number;
+  expiresAt: number;
+  entityId: string;
+  entityName: string;
+  currentName: string;
+  currentAreaId: string | null;
+  currentAreaName: string | null;
+  nextName?: string;
+  nextAreaId?: string;
+  nextAreaName?: string;
+};
+
 type FetchLike = typeof fetch;
 
 let fetchImpl: FetchLike | null = null;
 let entityCache: { fetchedAt: number; entities: CompactEntity[] } | null = null;
 let cacheInFlight: Promise<CompactEntity[]> | null = null;
+let areaCache: { fetchedAt: number; areas: HaArea[] } | null = null;
+let areaInFlight: Promise<HaArea[]> | null = null;
+const pendingByConversation = new Map<string, PendingConfigurationAction>();
+const pendingById = new Map<string, PendingConfigurationAction>();
 
 export function setHomeAssistantFetchForTests(fn: FetchLike | null): void {
   fetchImpl = fn;
@@ -168,6 +241,10 @@ export function setHomeAssistantFetchForTests(fn: FetchLike | null): void {
 export function resetHomeAssistantCacheForTests(): void {
   entityCache = null;
   cacheInFlight = null;
+  areaCache = null;
+  areaInFlight = null;
+  pendingByConversation.clear();
+  pendingById.clear();
 }
 
 export function isHomeAssistantConfigured(): boolean {
@@ -375,6 +452,214 @@ export async function callHomeAssistantService(
   return Array.isArray(result) ? result : result;
 }
 
+export async function fetchHomeAssistantAreas(signal?: AbortSignal): Promise<HaArea[]> {
+  const now = Date.now();
+  if (areaCache && now - areaCache.fetchedAt < cacheTtlMs()) {
+    return areaCache.areas;
+  }
+  if (areaInFlight) return areaInFlight;
+  areaInFlight = (async () => {
+    const body = await haRequest<unknown>("/config/area_registry/list", { signal });
+    const areas = parseAreaList(body);
+    areaCache = { fetchedAt: Date.now(), areas };
+    return areas;
+  })().finally(() => {
+    areaInFlight = null;
+  });
+  return areaInFlight;
+}
+
+export async function refreshHomeAssistantAreas(signal?: AbortSignal): Promise<HaArea[]> {
+  areaCache = null;
+  return fetchHomeAssistantAreas(signal);
+}
+
+export async function fetchEntityRegistryEntry(
+  entityId: string,
+  signal?: AbortSignal,
+): Promise<HaEntityRegistry> {
+  const body = await haRequest<unknown>(
+    `/config/entity_registry/${encodeURIComponent(entityId)}`,
+    { signal },
+  );
+  const entry = parseEntityRegistry(body);
+  if (!entry) {
+    throw new HomeAssistantError(
+      "invalid_response",
+      "Home Assistant returned an invalid entity registry entry",
+    );
+  }
+  return entry;
+}
+
+export async function updateEntityRegistry(
+  params: {
+    entityId: string;
+    areaId?: string | null;
+    name?: string;
+    signal?: AbortSignal;
+  },
+): Promise<HaEntityRegistry | null> {
+  const body: Record<string, unknown> = { entity_id: params.entityId };
+  if (params.areaId !== undefined) body.area_id = params.areaId;
+  if (params.name !== undefined) body.name = params.name;
+  const result = await haRequest<unknown>("/config/entity_registry/update", {
+    method: "POST",
+    body,
+    signal: params.signal,
+  });
+  if (result == null) return null;
+  const parsed = parseEntityRegistry(result);
+  if (!parsed) {
+    throw new HomeAssistantError(
+      "invalid_response",
+      "Home Assistant returned an invalid entity registry update",
+    );
+  }
+  return parsed;
+}
+
+export function parseAreaList(body: unknown): HaArea[] {
+  const raw = Array.isArray(body)
+    ? body
+    : body && typeof body === "object"
+      ? ((body as { result?: unknown; areas?: unknown }).result ??
+        (body as { areas?: unknown }).areas)
+      : null;
+  if (!Array.isArray(raw)) {
+    throw new HomeAssistantError(
+      "invalid_response",
+      "Home Assistant returned an invalid area list",
+    );
+  }
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as { area_id?: unknown; name?: unknown };
+      const areaId = typeof row.area_id === "string" ? row.area_id.trim() : "";
+      const name = typeof row.name === "string" ? row.name.trim() : "";
+      if (!areaId || !name) return null;
+      return { area_id: areaId, name };
+    })
+    .filter((area): area is HaArea => Boolean(area));
+}
+
+export function parseEntityRegistry(body: unknown): HaEntityRegistry | null {
+  const raw =
+    body && typeof body === "object" && "result" in body
+      ? (body as { result: unknown }).result
+      : body;
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as {
+    entity_id?: unknown;
+    name?: unknown;
+    original_name?: unknown;
+    area_id?: unknown;
+  };
+  if (typeof row.entity_id !== "string" || !validateEntityId(row.entity_id)) {
+    return null;
+  }
+  return {
+    entity_id: row.entity_id,
+    name: typeof row.name === "string" ? row.name : row.name === null ? null : undefined,
+    original_name:
+      typeof row.original_name === "string"
+        ? row.original_name
+        : row.original_name === null
+          ? null
+          : undefined,
+    area_id:
+      typeof row.area_id === "string"
+        ? row.area_id
+        : row.area_id === null
+          ? null
+          : undefined,
+  };
+}
+
+export function resolveAreas(areas: HaArea[], query: string): AreaResolveResult {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return { status: "none" };
+  const matches = areas.filter((area) => area.name.trim().toLowerCase() === needle);
+  if (matches.length === 1) return { status: "resolved", area: matches[0] };
+  if (matches.length > 1) return { status: "ambiguous", matches };
+  return { status: "none" };
+}
+
+export function validateEntityName(value: string): string | null {
+  const name = value.trim();
+  if (!name) return null;
+  if (name.length > MAX_ENTITY_NAME_LENGTH) return null;
+  if (/^\s*https?:\/\//i.test(name)) return null;
+  if (/[\r\n]/.test(name)) return null;
+  return name;
+}
+
+export function isAffirmativeConfirmation(text: string): boolean {
+  const value = text.trim();
+  if (/^yesterday\b/i.test(value)) return false;
+  return /^(yes|yeah|yep|yup|ok|okay|sure|do it|please do|confirm|go ahead|affirmative)\b/i.test(
+    value,
+  );
+}
+
+export function isNegativeConfirmation(text: string): boolean {
+  return /^(no|nope|cancel|don't|do not|never mind|nevermind|stop)\b/i.test(text.trim());
+}
+
+export function peekPendingConfiguration(
+  conversationId: string,
+  now = Date.now(),
+): PendingConfigurationAction | null {
+  const pending = pendingByConversation.get(conversationId);
+  if (!pending) return null;
+  if (pending.expiresAt <= now) {
+    forgetPending(pending.id);
+    return null;
+  }
+  return pending;
+}
+
+export function getPendingConfigurationById(
+  confirmationId: string,
+  now = Date.now(),
+): PendingConfigurationAction | null {
+  const pending = pendingById.get(confirmationId);
+  if (!pending) return null;
+  if (pending.expiresAt <= now) {
+    forgetPending(pending.id);
+    return null;
+  }
+  return pending;
+}
+
+function rememberPending(action: PendingConfigurationAction): void {
+  const previous = pendingByConversation.get(action.conversationId);
+  if (previous) forgetPending(previous.id);
+  pendingByConversation.set(action.conversationId, action);
+  pendingById.set(action.id, action);
+}
+
+function forgetPending(confirmationId: string): void {
+  const pending = pendingById.get(confirmationId);
+  pendingById.delete(confirmationId);
+  if (pending && pendingByConversation.get(pending.conversationId)?.id === confirmationId) {
+    pendingByConversation.delete(pending.conversationId);
+  }
+}
+
+export function cancelPendingConfiguration(conversationId: string): boolean {
+  const pending = pendingByConversation.get(conversationId);
+  if (!pending) return false;
+  forgetPending(pending.id);
+  return true;
+}
+
+function invalidateDiscoveryCaches(): void {
+  entityCache = null;
+  areaCache = null;
+}
+
 export function compactEntity(state: HaState): CompactEntity | null {
   const entityId = state.entity_id?.trim() ?? "";
   if (!ENTITY_ID_RE.test(entityId)) return null;
@@ -544,7 +829,10 @@ function isPlainServiceValue(value: unknown, depth = 0): boolean {
 export function actionRisk(
   domain: string,
   service: string,
-): "normal" | "high" {
+): "normal" | "high" | "configuration" {
+  if (domain === "home_assistant" && service === "update_entity") {
+    return "configuration";
+  }
   if (domain === "lock" && service === "unlock") return "high";
   if (domain === "alarm_control_panel" && /disarm|arm_home|arm_away/.test(service)) {
     return "high";
@@ -977,6 +1265,442 @@ async function retryAfterUnknown(
   return { ok: true, entities: resolved.entities };
 }
 
+export async function executeUpdateEntity(
+  input: {
+    entity_id?: string | string[];
+    name?: string;
+    area?: string;
+    search?: string;
+    query?: string;
+    confirm?: boolean;
+    confirmation_id?: string;
+    unsupported_fields?: string[];
+  },
+  context: {
+    signal?: AbortSignal;
+    conversationId?: string;
+    requestId?: string;
+    now?: number;
+  } = {},
+): Promise<HaToolPayload> {
+  if (!isHomeAssistantConfigured()) {
+    return withOk(toolError("not_configured", { message: "Home Assistant is not configured" }));
+  }
+  if (input.unsupported_fields?.some((field) => UNSUPPORTED_UPDATE_FIELDS.has(field))) {
+    return withOk(
+      toolError("invalid_input", {
+        message: "Unsupported entity registry fields were rejected",
+        fields: input.unsupported_fields.filter((field) =>
+          UNSUPPORTED_UPDATE_FIELDS.has(field),
+        ),
+      }),
+    );
+  }
+
+  const now = context.now ?? Date.now();
+  const conversationId = context.conversationId?.trim() || "default";
+  if (input.confirm) {
+    return confirmEntityUpdate(input, { ...context, conversationId, now });
+  }
+
+  try {
+    const prepared = await prepareEntityUpdate(input, context.signal);
+    if (!isPreparedUpdate(prepared)) return withOk(prepared);
+
+    if (!prepared.changed) {
+      return withOk({
+        success: true,
+        ok: true,
+        changed: false,
+        entity_id: prepared.entityId,
+        name: prepared.entityName,
+        message: prepared.noopMessage,
+        risk: "configuration",
+      });
+    }
+
+    const pending: PendingConfigurationAction = {
+      id: createConfirmationId(),
+      conversationId,
+      requestId: context.requestId ?? createConfirmationId(),
+      tool: "home_assistant.update_entity",
+      createdAt: now,
+      expiresAt: now + PENDING_CONFIGURATION_TTL_MS,
+      entityId: prepared.entityId,
+      entityName: prepared.entityName,
+      currentName: prepared.currentName,
+      currentAreaId: prepared.currentAreaId,
+      currentAreaName: prepared.currentAreaName,
+      nextName: prepared.nextName,
+      nextAreaId: prepared.nextAreaId,
+      nextAreaName: prepared.nextAreaName,
+    };
+    rememberPending(pending);
+    return withOk({
+      success: true,
+      ok: true,
+      changed: false,
+      pending_confirmation: true,
+      confirmation_id: pending.id,
+      entity_id: prepared.entityId,
+      name: prepared.entityName,
+      risk: "configuration",
+      changes: prepared.changes,
+      message: prepared.confirmMessage,
+    });
+  } catch (error) {
+    return withOk(toUpdateError(error));
+  }
+}
+
+export async function settlePendingConfiguration(
+  conversationId: string,
+  userText: string,
+  options: { signal?: AbortSignal; requestId?: string; now?: number } = {},
+): Promise<
+  | { kind: "executed"; payload: HaToolPayload }
+  | { kind: "cancelled"; payload: HaToolPayload }
+  | { kind: "none" }
+> {
+  const now = options.now ?? Date.now();
+  const pending = peekPendingConfiguration(conversationId, now);
+  if (!pending) return { kind: "none" };
+
+  if (isAffirmativeConfirmation(userText)) {
+    const payload = await applyPreparedUpdate(pending, options.signal);
+    forgetPending(pending.id);
+    return { kind: "executed", payload: withOk(payload) };
+  }
+  if (isNegativeConfirmation(userText)) {
+    forgetPending(pending.id);
+    return {
+      kind: "cancelled",
+      payload: withOk({
+        success: true,
+        ok: true,
+        changed: false,
+        message: "Cancelled the Home Assistant configuration change.",
+      }),
+    };
+  }
+  forgetPending(pending.id);
+  return { kind: "none" };
+}
+
+async function confirmEntityUpdate(
+  input: {
+    confirmation_id?: string;
+    entity_id?: string | string[];
+    name?: string;
+    area?: string;
+  },
+  context: { conversationId: string; requestId?: string; signal?: AbortSignal; now: number },
+): Promise<HaToolPayload> {
+  const pending = input.confirmation_id
+    ? getPendingConfigurationById(input.confirmation_id, context.now)
+    : peekPendingConfiguration(context.conversationId, context.now);
+  if (!pending || pending.conversationId !== context.conversationId) {
+    return withOk(
+      toolError("confirmation_required", {
+        message: "There is no matching pending Home Assistant configuration change.",
+      }),
+    );
+  }
+  if (context.requestId && pending.requestId === context.requestId) {
+    return withOk(
+      toolError("confirmation_required", {
+        message: "Wait for the user to confirm this Home Assistant configuration change.",
+      }),
+    );
+  }
+  if (input.confirmation_id && pending.id !== input.confirmation_id) {
+    return withOk(
+      toolError("confirmation_required", {
+        message: "That confirmation does not match the pending configuration change.",
+      }),
+    );
+  }
+  forgetPending(pending.id);
+  return withOk(await applyPreparedUpdate(pending, context.signal));
+}
+
+type PreparedEntityUpdate = {
+  changed: boolean;
+  entityId: string;
+  entityName: string;
+  currentName: string;
+  currentAreaId: string | null;
+  currentAreaName: string | null;
+  nextName?: string;
+  nextAreaId?: string;
+  nextAreaName?: string;
+  changes: NonNullable<HaToolPayload["changes"]>;
+  noopMessage: string;
+  confirmMessage: string;
+};
+
+async function prepareEntityUpdate(
+  input: {
+    entity_id?: string | string[];
+    name?: string;
+    area?: string;
+    search?: string;
+    query?: string;
+  },
+  signal?: AbortSignal,
+): Promise<PreparedEntityUpdate | HaToolPayload> {
+  const areaName = typeof input.area === "string" ? input.area.trim() : "";
+  const nextName = input.name === undefined || input.name === null
+    ? undefined
+    : validateEntityName(String(input.name));
+  if (input.name !== undefined && input.name !== null && !nextName) {
+    return toolError("invalid_input", { message: "name is empty or invalid" });
+  }
+  if (!areaName && !nextName) {
+    return toolError("invalid_input", {
+      message: "area or name is required",
+    });
+  }
+
+  const resolved = await resolveUpdateEntity(input, signal);
+  if (!resolved.ok) {
+    const payload = resolved.payload;
+    if (payload.error === "ambiguous_entity" && !payload.candidates && payload.matches) {
+      return {
+        ...payload,
+        candidates: payload.matches.map((match) => ({
+          entity_id: match.entity_id,
+          name: match.name,
+        })),
+      };
+    }
+    return payload;
+  }
+  if (resolved.entities.length !== 1) {
+    return toolError("ambiguous_entity", {
+      candidates: resolved.entities.map(candidateSummary),
+      matches: resolved.entities.map(matchSummary),
+    });
+  }
+  const entity = resolved.entities[0];
+
+  let registry: HaEntityRegistry;
+  try {
+    registry = await fetchEntityRegistryEntry(entity.entity_id, signal);
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+    const retried = await retryAfterUnknown(
+      {
+        entity_id: entity.entity_id,
+        name: input.search ?? input.query,
+      },
+      entity.entity_id,
+      signal,
+    );
+    if (!retried.ok) return retried.payload;
+    if (retried.entities.length !== 1) {
+      return toolError("ambiguous_entity", {
+        candidates: retried.entities.map(candidateSummary),
+        matches: retried.entities.map(matchSummary),
+      });
+    }
+    try {
+      registry = await fetchEntityRegistryEntry(retried.entities[0].entity_id, signal);
+    } catch (retryError) {
+      if (isNotFoundError(retryError)) {
+        return toolError("entity_not_found", { entity_id: retried.entities[0].entity_id });
+      }
+      throw retryError;
+    }
+  }
+
+  const areas = await refreshHomeAssistantAreas(signal);
+  let nextArea: HaArea | undefined;
+  if (areaName) {
+    const areaResult = resolveAreas(areas, areaName);
+    if (areaResult.status === "none") {
+      return toolError("area_not_found", {
+        area: areaName,
+        message: `No Home Assistant area named ${areaName} was found.`,
+      });
+    }
+    if (areaResult.status === "ambiguous") {
+      return toolError("ambiguous_area", {
+        candidates: areaResult.matches.map((area) => ({
+          area_id: area.area_id,
+          name: area.name,
+        })),
+        message: `Several Home Assistant areas could match ${areaName}.`,
+      });
+    }
+    nextArea = areaResult.area;
+  }
+
+  const currentName =
+    registry.name?.trim() ||
+    registry.original_name?.trim() ||
+    entity.name ||
+    registry.entity_id;
+  const currentAreaId = registry.area_id ?? null;
+  const currentAreaName =
+    areas.find((area) => area.area_id === currentAreaId)?.name ??
+    entity.area ??
+    null;
+
+  const changes: NonNullable<HaToolPayload["changes"]> = {};
+  let nextAreaId: string | undefined;
+  let nextAreaName: string | undefined;
+  if (nextArea) {
+    if (nextArea.area_id !== currentAreaId) {
+      changes.area = { from: currentAreaName, to: nextArea.name };
+      nextAreaId = nextArea.area_id;
+      nextAreaName = nextArea.name;
+    }
+  }
+  if (nextName && nextName !== currentName) {
+    changes.name = { from: currentName, to: nextName };
+  }
+
+  const changed = Boolean(changes.area || changes.name);
+  const entityName = currentName;
+  const confirmParts: string[] = [];
+  if (changes.area) {
+    confirmParts.push(
+      `move it from ${changes.area.from ?? "no area"} to ${changes.area.to}`,
+    );
+  }
+  if (changes.name) {
+    confirmParts.push(`rename it from ${changes.name.from} to ${changes.name.to}`);
+  }
+  return {
+    changed,
+    entityId: registry.entity_id,
+    entityName,
+    currentName,
+    currentAreaId,
+    currentAreaName,
+    nextName: changes.name && nextName ? nextName : undefined,
+    nextAreaId,
+    nextAreaName,
+    changes,
+    noopMessage: !changed
+      ? nextArea
+        ? `${entityName} is already assigned to ${nextArea.name}.`
+        : `${entityName} already has that name.`
+      : "",
+    confirmMessage: changed
+      ? `I found ${entityName}. This will ${confirmParts.join(" and ")}. Shall I do that?`
+      : "",
+  };
+}
+
+async function resolveUpdateEntity(
+  input: {
+    entity_id?: string | string[];
+    search?: string;
+    query?: string;
+  },
+  signal?: AbortSignal,
+): Promise<LiveEntities> {
+  if (Array.isArray(input.entity_id)) {
+    return {
+      ok: false,
+      payload: toolError("invalid_input", {
+        message: "update_entity accepts a single entity_id",
+      }),
+    };
+  }
+  const rawId = input.entity_id?.trim() ?? "";
+  if (rawId && validateEntityId(rawId)) {
+    return resolveForLiveCall({ entity_id: rawId }, signal);
+  }
+  const lookup = rawId || input.search?.trim() || input.query?.trim() || "";
+  if (!lookup) {
+    return {
+      ok: false,
+      payload: toolError("invalid_input", { message: "entity_id or search is required" }),
+    };
+  }
+  return resolveForLiveCall({ name: lookup }, signal);
+}
+
+async function applyPreparedUpdate(
+  pending: PendingConfigurationAction,
+  signal?: AbortSignal,
+): Promise<HaToolPayload> {
+  try {
+    const updated = await updateEntityRegistry({
+      entityId: pending.entityId,
+      areaId: pending.nextAreaId,
+      name: pending.nextName,
+      signal,
+    });
+    invalidateDiscoveryCaches();
+    await refreshHomeAssistantEntities(signal).catch(() => undefined);
+    const changes: NonNullable<HaToolPayload["changes"]> = {};
+    if (pending.nextAreaName) {
+      changes.area = { from: pending.currentAreaName, to: pending.nextAreaName };
+    }
+    if (pending.nextName) {
+      changes.name = { from: pending.currentName, to: pending.nextName };
+    }
+    return {
+      success: true,
+      ok: true,
+      changed: true,
+      entity_id: updated?.entity_id ?? pending.entityId,
+      name: pending.nextName ?? pending.entityName,
+      risk: "configuration",
+      changes,
+    };
+  } catch (error) {
+    return toUpdateError(error);
+  }
+}
+
+function isPreparedUpdate(
+  value: PreparedEntityUpdate | HaToolPayload,
+): value is PreparedEntityUpdate {
+  return "entityId" in value && "changed" in value && "confirmMessage" in value;
+}
+
+function candidateSummary(entity: CompactEntity): {
+  entity_id: string;
+  name: string;
+  area?: string;
+} {
+  return {
+    entity_id: entity.entity_id,
+    name: entity.name,
+    area: entity.area,
+  };
+}
+
+function createConfirmationId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `cfg-${Date.now()}-${Math.random()}`;
+}
+
+function withOk(payload: HaToolPayload): HaToolPayload {
+  return { ...payload, ok: payload.success };
+}
+
+function toUpdateError(error: unknown): HaToolPayload {
+  if (error instanceof HomeAssistantError) {
+    if (error.code === "not_configured" || error.code === "timeout") {
+      return toolError(error.code, { message: redactSecrets(error.message) });
+    }
+    return toolError("home_assistant_error", {
+      message: redactSecrets(error.message) || "Home Assistant rejected the entity update.",
+    });
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return toolError("timeout", { message: "Home Assistant request was cancelled" });
+  }
+  return toolError("home_assistant_error", {
+    message: "Home Assistant rejected the entity update.",
+  });
+}
+
 export function formatHomeAssistantCatalog(entities: CompactEntity[]): string {
   const useful = entities.filter((entity) => !SKIP_CATALOG_DOMAINS.has(entity.domain));
   const lines = useful.slice(0, 120).map((entity) => {
@@ -991,4 +1715,4 @@ export function formatHomeAssistantCatalog(entities: CompactEntity[]): string {
 }
 
 export const HOME_ASSISTANT_INSTRUCTIONS =
-  "You can inspect and control the house through Home Assistant tools. Home Assistant is the source of truth. Do not invent entity IDs. Use home_assistant.get_state for current state questions. If several entities could match, ask which one instead of guessing. Never mention access tokens or internal APIs.";
+  "You can inspect and control the house through Home Assistant tools. Home Assistant is the source of truth. Do not invent entity IDs. Use home_assistant.get_state for current state questions. Use home_assistant.call_service to turn devices on or off; that does not need confirmation. Use home_assistant.update_entity only to move an entity to an area or rename it. Pass the area name, never an area_id. If update_entity returns pending_confirmation, explain the change in plain language and ask the user to confirm. Do not claim a move or rename happened unless the tool result says changed: true. If several entities or areas could match, ask which one. Never mention access tokens or internal APIs.";

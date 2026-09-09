@@ -15,6 +15,7 @@ import {
   getCachedEntities,
   HOME_ASSISTANT_INSTRUCTIONS,
   isHomeAssistantConfigured,
+  settlePendingConfiguration,
 } from "@/lib/home-assistant";
 import { modelHasHomeAssistantTools, modelHasTool } from "@/lib/tools/access";
 import { HOME_ASSISTANT_TOOL_DEFINITIONS } from "@/lib/tools/home-assistant";
@@ -30,6 +31,7 @@ const MAX_TOOL_ROUNDS = 4;
 type ChatRequestBody = {
   model?: string;
   messages?: ChatMessage[];
+  conversationId?: string;
 };
 
 function isChatMessage(value: unknown): value is ChatMessage {
@@ -129,12 +131,21 @@ async function withHomeAssistant(
   };
 }
 
+function conversationKey(conversationId: string | undefined, messages: ChatMessage[]): string {
+  const explicit = conversationId?.trim();
+  if (explicit) return explicit;
+  const users = messages.filter((message) => message.role === "user");
+  return `fp:${users[0]?.content.slice(0, 80) ?? "unknown"}:${users.length}`;
+}
+
 async function streamWithOptionalTools(params: {
   model: string;
   messages: ChatMessage[];
   tools?: ProviderToolDefinition[];
   signal: AbortSignal;
   send: (payload: unknown) => void;
+  conversationId?: string;
+  requestId?: string;
 }): Promise<void> {
   const provider = getAIProvider();
   if (!params.tools?.length) {
@@ -208,6 +219,8 @@ async function streamWithOptionalTools(params: {
       const result = await runTool(call.name, toolInputFromArgs(call.arguments), {
         model: params.model,
         signal: params.signal,
+        conversationId: params.conversationId,
+        requestId: params.requestId,
       });
       params.send({
         content: "",
@@ -230,6 +243,25 @@ async function streamWithOptionalTools(params: {
   }
 }
 
+const BLOCKED_TOOL_FIELDS = [
+  "area_id",
+  "device_id",
+  "platform",
+  "integration",
+  "unique_id",
+  "disabled_by",
+  "hidden_by",
+  "new_entity_id",
+  "aliases",
+  "icon",
+  "labels",
+  "categories",
+  "options",
+  "url",
+  "method",
+  "path",
+];
+
 function toolInputFromArgs(args: Record<string, unknown>): ToolInput {
   const entityId = args.entity_id;
   return {
@@ -250,6 +282,12 @@ function toolInputFromArgs(args: Record<string, unknown>): ToolInput {
       !Array.isArray(args.service_data)
         ? (args.service_data as Record<string, unknown>)
         : undefined,
+    confirm: args.confirm === true,
+    confirmation_id:
+      typeof args.confirmation_id === "string" ? args.confirmation_id : undefined,
+    unsupported_fields: Object.keys(args).filter((key) =>
+      BLOCKED_TOOL_FIELDS.includes(key),
+    ),
   };
 }
 
@@ -265,6 +303,8 @@ export async function POST(request: Request) {
   const messages = Array.isArray(body.messages)
     ? body.messages.filter(isChatMessage)
     : [];
+  const requestId = globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}`;
+  const conversationId = conversationKey(body.conversationId, messages);
 
   if (!model) {
     return Response.json({ error: "model is required" }, { status: 400 });
@@ -299,9 +339,31 @@ export async function POST(request: Request) {
         const withClock = timeBlock
           ? [{ role: "system" as const, content: timeBlock }, ...withContext]
           : withContext;
+        const lastUserText = lastUser?.content ?? "";
+        const settled = await settlePendingConfiguration(conversationId, lastUserText, {
+          signal: request.signal,
+          requestId,
+        });
+        const confirmationNotes: ChatMessage[] = [];
+        if (settled.kind === "executed") {
+          send({
+            content: "",
+            done: false,
+            tool: { name: "home_assistant.update_entity", status: "done" },
+          });
+          confirmationNotes.push({
+            role: "system",
+            content: `A pending Home Assistant configuration change was confirmed and executed:\n${JSON.stringify(settled.payload)}`,
+          });
+        } else if (settled.kind === "cancelled") {
+          confirmationNotes.push({
+            role: "system",
+            content: settled.payload.message ?? "The pending Home Assistant change was cancelled.",
+          });
+        }
         const outbound = await withOptionalWebSearch(
           model,
-          withClock,
+          [...confirmationNotes, ...withClock],
           request.signal,
           send,
         );
@@ -312,6 +374,8 @@ export async function POST(request: Request) {
           tools: withHa.tools,
           signal: request.signal,
           send,
+          conversationId,
+          requestId,
         });
         send({ content: "", done: true });
       } catch (error) {

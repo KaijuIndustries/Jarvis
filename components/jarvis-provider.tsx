@@ -217,6 +217,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       try {
         await streamChat({
           model,
+          conversationId,
           messages: toProviderMessages(history),
           signal: controller.signal,
           onChunk: (chunk) => {

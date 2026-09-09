@@ -3,6 +3,7 @@ import {
   homeAssistantCallServiceTool,
   homeAssistantGetEntitiesTool,
   homeAssistantGetStateTool,
+  homeAssistantUpdateEntityTool,
 } from "./home-assistant";
 import type { Tool, ToolContext, ToolInput, ToolName, ToolResult } from "./types";
 import { isToolName } from "./types";
@@ -13,6 +14,7 @@ const tools: Record<ToolName, Tool> = {
   "home_assistant.get_entities": homeAssistantGetEntitiesTool,
   "home_assistant.get_state": homeAssistantGetStateTool,
   "home_assistant.call_service": homeAssistantCallServiceTool,
+  "home_assistant.update_entity": homeAssistantUpdateEntityTool,
 };
 
 export function getTool(name: ToolName): Tool {

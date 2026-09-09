@@ -3,7 +3,7 @@
  * the user likely wants house control or device state.
  */
 const NEEDS_HOME =
-  /\b(light|lights|lamp|lamps|switch|switches|socket|plug|thermostat|temperature|heating|heat|cooling|climate|scene|scenes|garage|door|lock|fan|heater|air.?con|air.?conditioning|hue|meross|daikin|brightness|dim|home assistant|downstairs|upstairs|hallway|kitchen|bedroom|living room|lounge|turn (it |them |the .+ )?(on|off)|switch (it |them |the .+ )?(on|off)|set .+ to \d+\s*(%|percent)|is (the |my )?.+ (on|off|open|closed|locked)|what lights|which lights)\b/i;
+  /\b(light|lights|lamp|lamps|switch|switches|socket|plug|thermostat|temperature|heating|heat|cooling|climate|scene|scenes|garage|door|lock|fan|heater|air.?con|air.?conditioning|hue|meross|daikin|brightness|dim|home assistant|downstairs|upstairs|hallway|kitchen|bedroom|living room|lounge|move|rename|area|turn (it |them |the .+ )?(on|off)|switch (it |them |the .+ )?(on|off)|set .+ to \d+\s*(%|percent)|is (the |my )?.+ (on|off|open|closed|locked)|what lights|which lights)\b/i;
 
 export function queryNeedsHomeAssistant(text: string): boolean {
   const value = text.trim();
