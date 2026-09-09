@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { JarvisProvider } from "@/components/jarvis-provider";
 import { OrbModeShortcut } from "@/components/OrbModeShortcut";
 import "./globals.css";
 
@@ -25,8 +26,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="h-full bg-background font-sans text-foreground">
-        <OrbModeShortcut />
-        {children}
+        <JarvisProvider>
+          <OrbModeShortcut />
+          {children}
+        </JarvisProvider>
       </body>
     </html>
   );

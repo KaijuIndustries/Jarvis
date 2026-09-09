@@ -28,13 +28,21 @@ test("maps error payloads without dropping the text chat path", () => {
   assert.deepEqual(parseWakeAudioResult({ type: "ok" }), { type: "ok" });
 });
 
-test("wake detection puts the Orb in listening without starting a chat turn", () => {
+test("wake detection does not change the Orb visual state", () => {
   assert.equal(
     resolveOrbState({
       streaming: false,
       healthOk: true,
       checkingHealth: false,
-      wakeListening: true,
+    }),
+    "idle",
+  );
+  assert.equal(
+    resolveOrbState({
+      streaming: false,
+      healthOk: true,
+      checkingHealth: false,
+      recording: true,
     }),
     "listening",
   );
@@ -43,7 +51,7 @@ test("wake detection puts the Orb in listening without starting a chat turn", ()
       streaming: true,
       healthOk: true,
       checkingHealth: false,
-      wakeListening: true,
+      recording: false,
     }),
     "thinking",
   );

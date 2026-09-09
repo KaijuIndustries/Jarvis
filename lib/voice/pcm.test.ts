@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  float32Rms,
   float32ToInt16,
   isSilentUtterance,
   PCM_RATE,
@@ -30,4 +31,10 @@ test("treats short or quiet recordings as silence", () => {
   assert.equal(isSilentUtterance(short, PCM_RATE), true);
   assert.equal(isSilentUtterance(quiet, PCM_RATE), true);
   assert.equal(isSilentUtterance(spoken, PCM_RATE), false);
+});
+
+test("measures RMS of float32 microphone frames", () => {
+  assert.equal(float32Rms(new Float32Array()), 0);
+  assert.ok(float32Rms(new Float32Array(8).fill(0.5)) > 0.4);
+  assert.ok(float32Rms(new Float32Array(8).fill(0.001)) < 0.01);
 });

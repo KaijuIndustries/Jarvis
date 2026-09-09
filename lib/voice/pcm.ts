@@ -89,6 +89,16 @@ export function int16Rms(samples: Int16Array): number {
   return Math.sqrt(sum / samples.length);
 }
 
+export function float32Rms(samples: Float32Array): number {
+  if (samples.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = samples[i] ?? 0;
+    sum += sample * sample;
+  }
+  return Math.sqrt(sum / samples.length);
+}
+
 export function isSilentUtterance(samples: Int16Array, rate: number): boolean {
   const duration = samples.length / rate;
   if (duration < MIN_UTTERANCE_SECONDS) return true;

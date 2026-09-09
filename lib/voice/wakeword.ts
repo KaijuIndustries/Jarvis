@@ -1,5 +1,4 @@
 export const WAKE_PHRASE = "Hey Friday";
-export const WAKE_LISTEN_MS = 3_000;
 
 export type WakeDetection = {
   type: "wake";

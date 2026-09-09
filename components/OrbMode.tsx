@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { JarvisOrb, type OrbAudioSource } from "@/components/orb";
 import { useMicrophoneAnalyser } from "@/hooks/useMicrophoneAnalyser";
 import { useMicrophoneSession } from "@/hooks/useMicrophoneSession";
-import { useOrbChat } from "@/hooks/useOrbChat";
 import { useOrbSpeech } from "@/hooks/useOrbSpeech";
+import { useOrbTurnMachine } from "@/hooks/useOrbTurnMachine";
 import { useVoiceCapture } from "@/hooks/useVoiceCapture";
 import { useWakeWord } from "@/hooks/useWakeWord";
 import { EMPTY_ORB_AUDIO } from "@/lib/client/audio-bands";
-import { fetchHealth } from "@/lib/client/api";
 import { SentenceBuffer } from "@/lib/voice/sentence-buffer";
+import { OrbConversation } from "./OrbConversation";
+import { useJarvis } from "./jarvis-provider";
 import { resolveOrbState } from "./resolveOrbState";
 
 /**
@@ -19,8 +20,7 @@ import { resolveOrbState } from "./resolveOrbState";
  * visualises the values it is given.
  */
 export function OrbMode() {
-  const [healthOk, setHealthOk] = useState(true);
-  const [checkingHealth, setCheckingHealth] = useState(true);
+  const jarvis = useJarvis();
   const controlsReady = useSyncExternalStore(
     () => () => {},
     () => true,
@@ -28,23 +28,30 @@ export function OrbMode() {
   );
   const session = useMicrophoneSession();
   const audioRef = useRef<OrbAudioSource>({ ...EMPTY_ORB_AUDIO });
-  const voice = useVoiceCapture(session);
-  const chat = useOrbChat({
-    transcript: voice.transcript,
-    recording: voice.recording,
-    transcribing: voice.transcribing,
-  });
+  const utteranceRef = useRef<(text: string | null) => void>(() => undefined);
+  const wakeDisarmRef = useRef<() => void>(() => undefined);
+  const onUtterance = useCallback((text: string | null) => {
+    utteranceRef.current(text);
+  }, []);
+  const pauseWake = useCallback(() => {
+    wakeDisarmRef.current();
+  }, []);
+  const voice = useVoiceCapture(session, onUtterance);
   const speech = useOrbSpeech({
     audioRef,
     context: session.context,
   });
+  const turn = useOrbTurnMachine({
+    voice,
+    streaming: jarvis.streaming,
+    speaking: speech.speaking,
+    sendMessage: jarvis.sendMessage,
+    pauseWake,
+  });
   const wake = useWakeWord({
     session,
-    suppress:
-      voice.recording ||
-      voice.transcribing ||
-      chat.streaming ||
-      speech.speaking,
+    enabled: turn.wakeArmed,
+    onWake: turn.onWake,
   });
   useMicrophoneAnalyser(session, {
     audioRef,
@@ -57,16 +64,24 @@ export function OrbMode() {
   const queueSentence = speech.queueSentence;
   const finishSpeechQueue = speech.finishSpeechQueue;
   const stopSpeech = speech.stop;
+  const assistantReply = lastAssistantContent(jarvis.activeConversation?.messages ?? []);
+
+  useEffect(() => {
+    utteranceRef.current = turn.handleUtterance;
+  }, [turn.handleUtterance]);
+
+  useEffect(() => {
+    wakeDisarmRef.current = wake.disarm;
+  }, [wake.disarm]);
 
   const state = resolveOrbState({
-    streaming: chat.streaming,
-    healthOk,
-    checkingHealth,
+    streaming: jarvis.streaming,
+    healthOk: jarvis.health.ok,
+    checkingHealth: jarvis.checkingHealth,
     recording: voice.recording,
     transcribing: voice.transcribing,
     speaking: speech.speaking,
-    wakeListening: wake.listening,
-    voiceError: Boolean(session.error || voice.error || chat.error),
+    voiceError: Boolean(session.error),
   });
 
   useEffect(() => {
@@ -78,7 +93,7 @@ export function OrbMode() {
       return;
     }
 
-    if (chat.streaming && speechTurnRef.current !== "streaming") {
+    if (jarvis.streaming && speechTurnRef.current !== "streaming") {
       speechTurnRef.current = "streaming";
       spokenReplyRef.current = "";
       sentenceBufferRef.current.reset();
@@ -87,7 +102,7 @@ export function OrbMode() {
 
     if (speechTurnRef.current === "streaming") {
       const previous = spokenReplyRef.current;
-      const reply = chat.reply;
+      const reply = assistantReply;
       if (reply.startsWith(previous)) {
         const delta = reply.slice(previous.length);
         spokenReplyRef.current = reply;
@@ -98,7 +113,7 @@ export function OrbMode() {
         }
       }
 
-      if (!chat.streaming) {
+      if (!jarvis.streaming) {
         speechTurnRef.current = "idle";
         for (const sentence of sentenceBufferRef.current.flush()) {
           queueSentence(sentence);
@@ -107,9 +122,9 @@ export function OrbMode() {
       }
     }
   }, [
-    chat.reply,
-    chat.streaming,
+    assistantReply,
     finishSpeechQueue,
+    jarvis.streaming,
     queueSentence,
     startSpeechQueue,
     stopSpeech,
@@ -119,50 +134,29 @@ export function OrbMode() {
 
   useEffect(() => {
     void session.start();
-    // The session object identity changes; start() is the stable entry point.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- auto-request mic once on /orb
   }, [session.start]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function tick() {
-      const health = await fetchHealth();
-      if (cancelled) return;
-      setHealthOk(health.ok);
-      setCheckingHealth(false);
-    }
-
-    void tick();
-    const timer = window.setInterval(tick, 10_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  const statusError = session.error || voice.error || chat.error || speech.error;
+  const statusError = session.error || voice.error || speech.error;
   const statusText = session.error
     ? session.error
     : voice.error
       ? voice.error
-      : chat.error
-        ? chat.error
-        : speech.error
-          ? speech.error
-          : voice.transcribing
-            ? "Transcribing..."
-            : voice.recording
-              ? "Listening..."
-              : chat.streaming
-                ? chat.reply || "Thinking..."
-                : speech.speaking
-                  ? chat.reply
-                  : chat.reply
-                    ? chat.reply
-                    : voice.transcript === ""
-                      ? "I didn't hear anything."
-                      : voice.transcript;
+      : speech.error
+        ? speech.error
+        : voice.transcribing
+          ? "Transcribing..."
+          : voice.recording
+            ? "Listening..."
+            : jarvis.streaming
+              ? "Thinking..."
+              : speech.speaking
+                ? "Speaking..."
+                : turn.mode === "followup"
+                  ? "Listening..."
+                  : wake.status === "unavailable"
+                    ? wake.error ?? "Wake word unavailable"
+                    : "";
 
   return (
     <div className="fixed inset-0 h-dvh w-dvw overflow-hidden bg-[#05060a]">
@@ -173,7 +167,11 @@ export function OrbMode() {
       />
       {controlsReady ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center px-4">
-          <div className="pointer-events-auto flex max-w-sm flex-col items-center gap-2 text-center">
+          <div className="pointer-events-auto flex w-full max-w-lg flex-col items-center gap-3 text-center">
+            <OrbConversation
+              conversation={jarvis.activeConversation}
+              streaming={jarvis.streaming}
+            />
             {!session.enabled ? (
               <button
                 type="button"
@@ -185,10 +183,10 @@ export function OrbMode() {
             ) : (
               <button
                 type="button"
-                disabled={voice.transcribing || chat.streaming || speech.speaking}
+                disabled={voice.transcribing || jarvis.streaming || speech.speaking}
                 onClick={() => {
-                  if (voice.recording) void voice.stop();
-                  else void voice.start();
+                  if (voice.recording) turn.stopManual();
+                  else turn.startManual();
                 }}
                 className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[12px] text-white/70 hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -200,30 +198,31 @@ export function OrbMode() {
                 className={
                   statusError
                     ? "text-[12px] text-[#c47c6e]"
-                    : chat.reply && !voice.recording && !voice.transcribing
-                      ? "text-[12px] text-white/70"
-                      : voice.transcript && !voice.recording && !voice.transcribing
-                        ? "text-[12px] text-white/70"
-                        : "text-[11px] tracking-wide text-white/35"
+                    : "text-[11px] tracking-wide text-white/35"
                 }
               >
                 {statusText}
               </p>
             ) : null}
             <p className="text-[10px] tracking-wide text-white/30">
-              {wake.status === "detected"
-                ? "Wake word: detected"
-                : wake.status === "listening"
-                  ? "Wake word: listening"
-                  : wake.status === "unavailable"
-                    ? wake.error
-                      ? `Wake word: unavailable (${wake.error})`
-                      : "Wake word: unavailable"
-                    : "Wake word: off"}
+              {wake.status === "armed"
+                ? "Wake word: armed"
+                : wake.status === "unavailable"
+                  ? "Wake word: unavailable"
+                  : "Wake word: off"}
             </p>
           </div>
         </div>
       ) : null}
     </div>
   );
+}
+
+function lastAssistantContent(
+  messages: { role: string; content: string }[],
+): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === "assistant") return messages[i]?.content ?? "";
+  }
+  return "";
 }

@@ -9,7 +9,7 @@ import {
   PCM_RATE,
   resampleInt16Mono,
 } from "@/lib/voice/pcm";
-import { WAKE_LISTEN_MS, WAKE_PHRASE } from "@/lib/voice/wakeword";
+import { WAKE_PHRASE } from "@/lib/voice/wakeword";
 import type { MicrophoneSession } from "./useMicrophoneSession";
 
 type CaptureNodes = {
@@ -18,7 +18,7 @@ type CaptureNodes = {
   mute: GainNode;
 };
 
-export type WakeWordStatus = "off" | "listening" | "detected" | "unavailable";
+export type WakeWordStatus = "off" | "armed" | "unavailable";
 
 function copyPcm(samples: Int16Array): ArrayBuffer {
   const bytes = int16ToBytes(samples);
@@ -41,11 +41,12 @@ function concatInt16(chunks: Int16Array[]): Int16Array {
 
 /**
  * Streams Orb microphone PCM to Jarvis for Hey Friday detection.
- * Does not start Whisper, Ollama, or Piper.
+ * Detection is a silent trigger; it does not own Orb visual state.
  */
 export function useWakeWord(input: {
   session: MicrophoneSession;
-  suppress: boolean;
+  enabled: boolean;
+  onWake: () => void;
 }) {
   const nodesRef = useRef<CaptureNodes | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -53,22 +54,21 @@ export function useWakeWord(input: {
   const pendingRef = useRef<Int16Array[]>([]);
   const sampleRateRef = useRef(48_000);
   const sessionIdRef = useRef("");
-  const suppressRef = useRef(false);
-  const listenTimerRef = useRef(0);
-  const listeningRef = useRef(false);
+  const generationRef = useRef(0);
   const pumpRef = useRef<() => void>(() => undefined);
-  const markDetectedRef = useRef<() => void>(() => undefined);
+  const onWakeRef = useRef(input.onWake);
 
-  const [streamStatus, setStreamStatus] = useState<Exclude<WakeWordStatus, "off">>("listening");
-  const [listening, setListening] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<"armed" | "unavailable">("armed");
   const [error, setError] = useState<string | null>(null);
 
-  const enabled = Boolean(input.session.enabled && input.session.stream && input.session.context);
-  const status: WakeWordStatus = enabled ? streamStatus : "off";
+  const live = Boolean(
+    input.enabled && input.session.enabled && input.session.stream && input.session.context,
+  );
+  const status: WakeWordStatus = live ? streamStatus : "off";
 
   useEffect(() => {
-    suppressRef.current = input.suppress;
-  }, [input.suppress]);
+    onWakeRef.current = input.onWake;
+  }, [input.onWake]);
 
   const detach = useCallback(() => {
     const nodes = nodesRef.current;
@@ -88,27 +88,14 @@ export function useWakeWord(input: {
     }
   }, []);
 
-  const stopListenTimer = useCallback(() => {
-    if (!listenTimerRef.current) return;
-    window.clearTimeout(listenTimerRef.current);
-    listenTimerRef.current = 0;
-  }, []);
-
-  useEffect(() => {
-    markDetectedRef.current = () => {
-      if (listeningRef.current) return;
-      listeningRef.current = true;
-      stopListenTimer();
-      setListening(true);
-      setStreamStatus("detected");
-      listenTimerRef.current = window.setTimeout(() => {
-        listenTimerRef.current = 0;
-        listeningRef.current = false;
-        setListening(false);
-        setStreamStatus((current) => (current === "detected" ? "listening" : current));
-      }, WAKE_LISTEN_MS);
-    };
-  }, [stopListenTimer]);
+  const disarm = useCallback(() => {
+    generationRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    pendingRef.current = [];
+    sessionIdRef.current = "";
+    detach();
+  }, [detach]);
 
   useEffect(() => {
     pumpRef.current = () => {
@@ -128,12 +115,12 @@ export function useWakeWord(input: {
             if (abortRef.current !== abort) return;
             if (result.type === "wake" && result.phrase === WAKE_PHRASE) {
               console.log("Wake word detected:", result);
-              if (!suppressRef.current) markDetectedRef.current();
+              onWakeRef.current();
             } else if (result.type === "error") {
               setStreamStatus("unavailable");
               setError(result.error);
             } else {
-              setStreamStatus((current) => (current === "unavailable" ? "listening" : current));
+              setStreamStatus((current) => (current === "unavailable" ? "armed" : current));
               setError(null);
             }
           }
@@ -157,18 +144,18 @@ export function useWakeWord(input: {
   }, []);
 
   useEffect(() => {
-    if (!enabled || !input.session.stream || !input.session.context) {
+    if (!live || !input.session.stream || !input.session.context) {
       abortRef.current?.abort();
       abortRef.current = null;
       pendingRef.current = [];
       sessionIdRef.current = "";
       detach();
-      stopListenTimer();
-      listeningRef.current = false;
       return;
     }
 
     let cancelled = false;
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
     const context = input.session.context;
     const stream = input.session.stream;
     const abort = new AbortController();
@@ -179,9 +166,9 @@ export function useWakeWord(input: {
 
     void (async () => {
       let healthy = false;
-      while (!cancelled) {
+      while (!cancelled && generationRef.current === generation) {
         const health = await fetchWakeHealth();
-        if (cancelled) return;
+        if (cancelled || generationRef.current !== generation) return;
         if (health.ok) {
           healthy = true;
           setError(null);
@@ -191,18 +178,18 @@ export function useWakeWord(input: {
         setError(health.error ?? "Wake-word service is unavailable.");
         await new Promise((resolve) => window.setTimeout(resolve, 3000));
       }
-      if (!healthy || cancelled) return;
+      if (!healthy || cancelled || generationRef.current !== generation) return;
 
       try {
         await ensurePcmWorklet(context);
       } catch {
-        if (!cancelled) {
+        if (!cancelled && generationRef.current === generation) {
           setStreamStatus("unavailable");
           setError("This browser cannot capture raw microphone audio.");
         }
         return;
       }
-      if (cancelled || abortRef.current !== abort) return;
+      if (cancelled || generationRef.current !== generation || abortRef.current !== abort) return;
 
       try {
         const source = context.createMediaStreamSource(stream);
@@ -215,7 +202,6 @@ export function useWakeWord(input: {
         mute.gain.value = 0;
         node.port.onmessage = (event: MessageEvent<Float32Array | { type: string }>) => {
           if (!(event.data instanceof Float32Array)) return;
-          if (suppressRef.current) return;
           try {
             const pcm = resampleInt16Mono(
               float32ToInt16(event.data),
@@ -237,9 +223,9 @@ export function useWakeWord(input: {
         node.connect(mute);
         mute.connect(context.destination);
         nodesRef.current = { source, node, mute };
-        setStreamStatus("listening");
+        setStreamStatus("armed");
       } catch {
-        if (!cancelled) {
+        if (!cancelled && generationRef.current === generation) {
           detach();
           setStreamStatus("unavailable");
           setError("Could not start wake-word capture.");
@@ -254,9 +240,7 @@ export function useWakeWord(input: {
       pendingRef.current = [];
       detach();
     };
-  }, [detach, enabled, input.session.context, input.session.stream, stopListenTimer]);
+  }, [detach, input.session.context, input.session.stream, live]);
 
-  useEffect(() => () => stopListenTimer(), [stopListenTimer]);
-
-  return { status, listening: enabled && listening, error };
+  return { status, error, disarm };
 }

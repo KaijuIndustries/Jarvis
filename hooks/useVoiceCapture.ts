@@ -5,6 +5,7 @@ import { transcribeUtterance } from "@/lib/client/api";
 import { resampleFloat32 } from "@/lib/client/microphone";
 import { ensurePcmWorklet, PCM_WORKLET_NAME } from "@/lib/client/pcm-worklet";
 import {
+  float32Rms,
   float32ToInt16,
   int16ToBytes,
   isSilentUtterance,
@@ -13,6 +14,11 @@ import {
   PCM_RATE,
   PCM_WIDTH,
 } from "@/lib/voice/pcm";
+import {
+  ORB_COMMAND_PREROLL_MS,
+  ORB_COMMAND_SILENCE_MS,
+  ORB_VOICE_RMS,
+} from "@/lib/voice/orb-turn";
 import type { MicrophoneSession } from "./useMicrophoneSession";
 
 function concatFloat32(chunks: Float32Array[]): Float32Array {
@@ -40,7 +46,27 @@ type CaptureNodes = {
   mute: GainNode;
 };
 
-export function useVoiceCapture(session: MicrophoneSession) {
+export type VoiceStartOptions = {
+  autoStop?: boolean;
+  waitForSpeechMs?: number;
+  prerollMs?: number;
+  silenceMs?: number;
+};
+
+type CaptureRuntime = {
+  autoStop: boolean;
+  waitForSpeechMs: number;
+  prerollMs: number;
+  silenceMs: number;
+  startedAt: number;
+  voiced: boolean;
+  lastVoiceAt: number;
+};
+
+export function useVoiceCapture(
+  session: MicrophoneSession,
+  onUtterance?: (text: string | null) => void,
+) {
   const chunksRef = useRef<Float32Array[]>([]);
   const nodesRef = useRef<CaptureNodes | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -49,11 +75,18 @@ export function useVoiceCapture(session: MicrophoneSession) {
   const recordingRef = useRef(false);
   const sampleRateRef = useRef(48_000);
   const stopRef = useRef<() => Promise<void>>(async () => undefined);
+  const cancelRef = useRef<(notify?: boolean) => void>(() => undefined);
+  const runtimeRef = useRef<CaptureRuntime | null>(null);
+  const onUtteranceRef = useRef(onUtterance);
 
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onUtteranceRef.current = onUtterance;
+  }, [onUtterance]);
 
   const detachCapture = useCallback(() => {
     if (stopTimerRef.current) {
@@ -78,15 +111,23 @@ export function useVoiceCapture(session: MicrophoneSession) {
     }
   }, []);
 
-  const cancel = useCallback(() => {
+  const finishUtterance = useCallback((generation: number, text: string | null) => {
+    if (generationRef.current !== generation) return;
+    onUtteranceRef.current?.(text);
+  }, []);
+
+  const cancel = useCallback((notify = true) => {
+    const hadWork = recordingRef.current || Boolean(abortRef.current);
     generationRef.current += 1;
     recordingRef.current = false;
     abortRef.current?.abort();
     abortRef.current = null;
     detachCapture();
     chunksRef.current = [];
+    runtimeRef.current = null;
     setRecording(false);
     setTranscribing(false);
+    if (notify && hadWork) onUtteranceRef.current?.(null);
   }, [detachCapture]);
 
   const stop = useCallback(async () => {
@@ -130,6 +171,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
 
     if (samples.length === 0) {
       setTranscript("");
+      finishUtterance(generation, "");
       return;
     }
 
@@ -140,6 +182,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
         resampled = await resampleFloat32(samples, nativeRate, PCM_RATE);
       } catch {
         setError("Could not prepare the recording.");
+        finishUtterance(generation, null);
         return;
       }
 
@@ -148,6 +191,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
       const pcm = float32ToInt16(resampled);
       if (isSilentUtterance(pcm, PCM_RATE)) {
         setTranscript("");
+        finishUtterance(generation, "");
         return;
       }
 
@@ -160,6 +204,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
       );
       if (generationRef.current !== generation) return;
       setTranscript(result.text);
+      finishUtterance(generation, result.text);
     } catch (cause) {
       if (generationRef.current !== generation) return;
       if (cause instanceof DOMException && cause.name === "AbortError") return;
@@ -168,39 +213,53 @@ export function useVoiceCapture(session: MicrophoneSession) {
           ? cause.message
           : "Speech recognition failed.";
       setError(message);
+      finishUtterance(generation, null);
     } finally {
       if (abortRef.current) abortRef.current = null;
       if (generationRef.current === generation) {
         setTranscribing(false);
       }
     }
-  }, [detachCapture]);
+  }, [detachCapture, finishUtterance]);
 
   useEffect(() => {
     stopRef.current = stop;
   }, [stop]);
 
-  const start = useCallback(async () => {
-    if (recordingRef.current) return;
+  useEffect(() => {
+    cancelRef.current = cancel;
+  }, [cancel]);
+
+  const start = useCallback(async (options?: VoiceStartOptions) => {
+    if (recordingRef.current) return true;
     if (!session.stream || !session.context) {
       setError("Enable the microphone first.");
-      return;
+      return false;
     }
 
     setError(null);
     setTranscript(null);
     chunksRef.current = [];
+    runtimeRef.current = {
+      autoStop: Boolean(options?.autoStop),
+      waitForSpeechMs: options?.waitForSpeechMs ?? 0,
+      prerollMs: options?.prerollMs ?? (options?.autoStop ? ORB_COMMAND_PREROLL_MS : 0),
+      silenceMs: options?.silenceMs ?? ORB_COMMAND_SILENCE_MS,
+      startedAt: performance.now(),
+      voiced: false,
+      lastVoiceAt: 0,
+    };
 
     try {
       await ensurePcmWorklet(session.context);
     } catch {
       setError("This browser cannot capture raw microphone audio.");
-      return;
+      return false;
     }
 
     if (!session.stream || !session.context) {
       setError("The microphone is no longer available.");
-      return;
+      return false;
     }
 
     try {
@@ -213,8 +272,33 @@ export function useVoiceCapture(session: MicrophoneSession) {
       const mute = session.context.createGain();
       mute.gain.value = 0;
       node.port.onmessage = (event: MessageEvent<Float32Array | { type: string }>) => {
-        if (event.data instanceof Float32Array) {
-          chunksRef.current.push(event.data);
+        if (!(event.data instanceof Float32Array)) return;
+        const runtime = runtimeRef.current;
+        const now = performance.now();
+        if (runtime && now - runtime.startedAt < runtime.prerollMs) {
+          return;
+        }
+        chunksRef.current.push(event.data);
+        if (!runtime) return;
+        const level = float32Rms(event.data);
+        if (level >= ORB_VOICE_RMS) {
+          runtime.voiced = true;
+          runtime.lastVoiceAt = now;
+        }
+        if (
+          runtime.waitForSpeechMs > 0 &&
+          !runtime.voiced &&
+          now - runtime.startedAt >= runtime.waitForSpeechMs
+        ) {
+          cancelRef.current();
+          return;
+        }
+        if (
+          runtime.autoStop &&
+          runtime.voiced &&
+          now - runtime.lastVoiceAt >= runtime.silenceMs
+        ) {
+          void stopRef.current();
         }
       };
       node.onprocessorerror = () => {
@@ -229,7 +313,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
     } catch {
       detachCapture();
       setError("Could not start speech capture.");
-      return;
+      return false;
     }
 
     recordingRef.current = true;
@@ -237,6 +321,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
     stopTimerRef.current = window.setTimeout(() => {
       void stopRef.current();
     }, MAX_UTTERANCE_SECONDS * 1000);
+    return true;
   }, [cancel, detachCapture, session.context, session.stream]);
 
   useEffect(() => {
@@ -246,7 +331,7 @@ export function useVoiceCapture(session: MicrophoneSession) {
     return () => window.clearTimeout(timer);
   }, [cancel, session.enabled]);
 
-  useEffect(() => cancel, [cancel]);
+  useEffect(() => () => cancel(false), [cancel]);
 
   return {
     recording,
