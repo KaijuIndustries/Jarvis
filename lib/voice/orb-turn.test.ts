@@ -32,3 +32,14 @@ test("follow-up starts only after a finished orb turn", () => {
   assert.equal(shouldStartFollowup({ ...ready, recording: true }), false);
   assert.equal(shouldStartFollowup({ ...ready, pendingFollowup: false }), false);
 });
+
+test("follow-up stays blocked while speech is still active", () => {
+  const ready = {
+    pendingFollowup: true,
+    streaming: false,
+    speaking: true,
+    recording: false,
+    transcribing: false,
+  };
+  assert.equal(shouldStartFollowup(ready), false);
+});

@@ -3,6 +3,7 @@ export const ORB_COMMAND_WAIT_MS = 8_000;
 export const ORB_COMMAND_PREROLL_MS = 450;
 export const ORB_COMMAND_SILENCE_MS = 1_000;
 export const ORB_VOICE_RMS = 0.018;
+export const ORB_POST_SPEECH_MS = 400;
 
 export type OrbMicMode = "passive" | "command" | "followup";
 

@@ -26,10 +26,14 @@ export function loadConversations(): Conversation[] {
 
 export function saveConversations(conversations: Conversation[]): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(
-    CONVERSATION_STORAGE_KEY,
-    JSON.stringify(conversations),
-  );
+  try {
+    window.localStorage.setItem(
+      CONVERSATION_STORAGE_KEY,
+      JSON.stringify(conversations),
+    );
+  } catch {
+    // Keep the in-memory session even if the browser refuses to persist it.
+  }
 }
 
 export function loadSelectedModel(): string | null {

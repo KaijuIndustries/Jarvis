@@ -18,7 +18,7 @@ export function OrbConversation(input: {
   if (messages.length === 0) return null;
 
   return (
-    <div className="pointer-events-auto max-h-[32vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-black/45 px-3 py-2 backdrop-blur-md">
+    <div className="pointer-events-auto max-h-full w-full overflow-y-auto rounded-2xl border border-white/10 bg-black/45 px-3 py-2 backdrop-blur-md">
       <div className="flex flex-col gap-3">
         {messages.map((message) => {
           const isUser = message.role === "user";

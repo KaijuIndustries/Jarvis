@@ -83,6 +83,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   const [streaming, setStreaming] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const generatingRef = useRef(false);
 
   const refreshModels = useCallback(async () => {
     const result = await fetchModels();
@@ -272,41 +273,46 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   const sendMessage = useCallback(
     async (content: string) => {
       const text = content.trim();
-      if (!text || streaming) return;
+      if (!text || generatingRef.current || abortRef.current) return;
+      generatingRef.current = true;
 
-      const current = getSessionSnapshot();
-      let conversation =
-        current.conversations.find((item) => item.id === current.activeId) ??
-        null;
+      try {
+        const current = getSessionSnapshot();
+        let conversation =
+          current.conversations.find((item) => item.id === current.activeId) ??
+          null;
 
-      if (!conversation) {
-        conversation = createConversation(current.selectedModel ?? "");
-        setSessionConversations([conversation, ...current.conversations]);
-        setSessionActiveId(conversation.id);
+        if (!conversation) {
+          conversation = createConversation(current.selectedModel ?? "");
+          setSessionConversations([conversation, ...current.conversations]);
+          setSessionActiveId(conversation.id);
+        }
+
+        const userMessage: ConversationMessage = {
+          id: createId(),
+          role: "user",
+          content: text,
+          createdAt: Date.now(),
+        };
+        const history = [...conversation.messages, userMessage];
+        const title =
+          conversation.messages.length === 0
+            ? titleFromPrompt(text)
+            : conversation.title;
+
+        patchConversation(conversation.id, (item) => ({
+          ...item,
+          title,
+          updatedAt: Date.now(),
+          messages: history,
+        }));
+
+        await runGeneration(conversation.id, history);
+      } finally {
+        generatingRef.current = false;
       }
-
-      const userMessage: ConversationMessage = {
-        id: createId(),
-        role: "user",
-        content: text,
-        createdAt: Date.now(),
-      };
-      const history = [...conversation.messages, userMessage];
-      const title =
-        conversation.messages.length === 0
-          ? titleFromPrompt(text)
-          : conversation.title;
-
-      patchConversation(conversation.id, (item) => ({
-        ...item,
-        title,
-        updatedAt: Date.now(),
-        messages: history,
-      }));
-
-      await runGeneration(conversation.id, history);
     },
-    [runGeneration, streaming],
+    [runGeneration],
   );
 
   const regenerate = useCallback(async () => {

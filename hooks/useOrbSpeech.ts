@@ -11,6 +11,8 @@ import {
   writeOrbAudio,
 } from "@/lib/client/audio-bands";
 import { getAudioContextConstructor } from "@/lib/client/microphone";
+import { ORB_POST_SPEECH_MS } from "@/lib/voice/orb-turn";
+import { prepareSpeechText } from "@/lib/voice/speech-text";
 
 type PlaybackNodes = {
   source: AudioBufferSourceNode;
@@ -33,6 +35,7 @@ export function useOrbSpeech(input: {
   context: AudioContext | null;
 }) {
   const [speaking, setSpeaking] = useState(false);
+  const [active, setActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -104,6 +107,7 @@ export function useOrbSpeech(input: {
     kick();
     detach();
     setSpeaking(false);
+    setActive(false);
   }, [detach, kick]);
 
   const startPlayback = useCallback(
@@ -243,6 +247,11 @@ export function useOrbSpeech(input: {
       if (generationRef.current !== generation) return;
       detach();
       setSpeaking(false);
+      if (ORB_POST_SPEECH_MS > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, ORB_POST_SPEECH_MS));
+      }
+      if (generationRef.current !== generation) return;
+      setActive(false);
     },
     [detach, playWav, waitForWork],
   );
@@ -260,6 +269,7 @@ export function useOrbSpeech(input: {
       detach();
       setError(null);
       setSpeaking(false);
+      setActive(true);
       void runConsumer(generationRef.current);
     },
     [detach, kick, runConsumer],
@@ -267,10 +277,11 @@ export function useOrbSpeech(input: {
 
   const queueSentence = useCallback(
     (text: string) => {
-      const trimmed = text.replace(/\s+/g, " ").trim();
+      const trimmed = prepareSpeechText(text);
       if (!trimmed) return;
       queueRef.current.push(trimmed);
       setSpeaking(true);
+      setActive(true);
       kick();
     },
     [kick],
@@ -296,6 +307,7 @@ export function useOrbSpeech(input: {
 
   return {
     speaking,
+    active,
     error,
     speak,
     stop,

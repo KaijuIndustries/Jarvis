@@ -44,7 +44,7 @@ export function OrbMode() {
   const turn = useOrbTurnMachine({
     voice,
     streaming: jarvis.streaming,
-    speaking: speech.speaking,
+    speaking: speech.speaking || speech.active,
     sendMessage: jarvis.sendMessage,
     pauseWake,
   });
@@ -86,11 +86,13 @@ export function OrbMode() {
 
   useEffect(() => {
     if (voice.recording || voice.transcribing) {
-      speechTurnRef.current = "idle";
-      spokenReplyRef.current = "";
-      sentenceBufferRef.current.reset();
-      stopSpeech();
-      return;
+      if (!jarvis.streaming && !speech.speaking && !speech.active) {
+        speechTurnRef.current = "idle";
+        spokenReplyRef.current = "";
+        sentenceBufferRef.current.reset();
+        stopSpeech();
+        return;
+      }
     }
 
     if (jarvis.streaming && speechTurnRef.current !== "streaming") {
@@ -130,6 +132,8 @@ export function OrbMode() {
     stopSpeech,
     voice.recording,
     voice.transcribing,
+    speech.speaking,
+    speech.active,
   ]);
 
   useEffect(() => {
@@ -166,53 +170,57 @@ export function OrbMode() {
         className="h-full w-full"
       />
       {controlsReady ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center px-4">
-          <div className="pointer-events-auto flex w-full max-w-lg flex-col items-center gap-3 text-center">
+        <>
+          <div className="pointer-events-none absolute inset-y-6 left-4 z-10 flex w-[min(20rem,34vw)] items-start">
             <OrbConversation
               conversation={jarvis.activeConversation}
               streaming={jarvis.streaming}
             />
-            {!session.enabled ? (
-              <button
-                type="button"
-                onClick={() => void session.start()}
-                className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[12px] text-white/70 hover:bg-white/10 hover:text-white"
-              >
-                Enable microphone
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={voice.transcribing || jarvis.streaming || speech.speaking}
-                onClick={() => {
-                  if (voice.recording) turn.stopManual();
-                  else turn.startManual();
-                }}
-                className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[12px] text-white/70 hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {voice.recording ? "Stop" : "Start speaking"}
-              </button>
-            )}
-            {statusText ? (
-              <p
-                className={
-                  statusError
-                    ? "text-[12px] text-[#c47c6e]"
-                    : "text-[11px] tracking-wide text-white/35"
-                }
-              >
-                {statusText}
-              </p>
-            ) : null}
-            <p className="text-[10px] tracking-wide text-white/30">
-              {wake.status === "armed"
-                ? "Wake word: armed"
-                : wake.status === "unavailable"
-                  ? "Wake word: unavailable"
-                  : "Wake word: off"}
-            </p>
           </div>
-        </div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center px-4">
+            <div className="pointer-events-auto flex flex-col items-center gap-2 text-center">
+              {!session.enabled ? (
+                <button
+                  type="button"
+                  onClick={() => void session.start()}
+                  className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[12px] text-white/70 hover:bg-white/10 hover:text-white"
+                >
+                  Enable microphone
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={voice.transcribing || jarvis.streaming || speech.speaking || speech.active}
+                  onClick={() => {
+                    if (voice.recording) turn.stopManual();
+                    else turn.startManual();
+                  }}
+                  className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[12px] text-white/70 hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {voice.recording ? "Stop" : "Start speaking"}
+                </button>
+              )}
+              {statusText ? (
+                <p
+                  className={
+                    statusError
+                      ? "text-[12px] text-[#c47c6e]"
+                      : "text-[11px] tracking-wide text-white/35"
+                  }
+                >
+                  {statusText}
+                </p>
+              ) : null}
+              <p className="text-[10px] tracking-wide text-white/30">
+                {wake.status === "armed"
+                  ? "Wake word: armed"
+                  : wake.status === "unavailable"
+                    ? "Wake word: unavailable"
+                    : "Wake word: off"}
+              </p>
+            </div>
+          </div>
+        </>
       ) : null}
     </div>
   );
