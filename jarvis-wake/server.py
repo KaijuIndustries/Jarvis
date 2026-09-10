@@ -14,13 +14,20 @@ from typing import Any
 
 import numpy as np
 
-from wake_gate import WakeGate, friday_score, should_reset_continuous_session
+from wake_gate import (
+    WakeGate,
+    friday_score,
+    parse_positive_int,
+    should_reset_continuous_session,
+)
 
 PHRASE = "Hey Friday"
 FRAME_SAMPLES = 1280
 MAX_BODY_BYTES = 32 * 1024
 SESSION_IDLE_SECONDS = 60.0
 SESSION_RESET_SECONDS = 45.0
+RESET_WARMUP_FRAMES = 8
+PASSIVE_LOG_SECONDS = 5.0
 DEFAULT_THRESHOLD = 0.5
 DEFAULT_CONFIRM_FRAMES = 2
 DEFAULT_VAD_THRESHOLD = 0.5
@@ -78,14 +85,18 @@ class WakeRuntime:
         self.pending = np.zeros(0, dtype=np.int16)
         self.last_seen = time.monotonic()
         self.last_reset = self.last_seen
-
-    def reset_session(self, session_id: str) -> None:
+        self.warmup_frames = 0
+        self.peak_score = 0.0
+        self.last_peak_log = self.last_seen
         self.session_id = session_id
         self.pending = np.zeros(0, dtype=np.int16)
-        self.gate.reset_streak()
+        self.gate.reset()
         self.model.reset()
+        self.warmup_frames = RESET_WARMUP_FRAMES
         self.last_seen = time.monotonic()
         self.last_reset = self.last_seen
+        if self.debug:
+            sys.stderr.write(f"Wake session reset ({reason})\n")
 
     def feed(self, session_id: str, pcm: bytes) -> dict[str, Any]:
         if not session_id:
@@ -99,9 +110,9 @@ class WakeRuntime:
         now = time.monotonic()
         with self.lock:
             if session_id != self.session_id:
-                self.reset_session(session_id)
+                self.reset_session(session_id, "new-session")
             elif now - self.last_seen > SESSION_IDLE_SECONDS:
-                self.reset_session(session_id)
+                self.reset_session(session_id, "idle")
             elif should_reset_continuous_session(
                 self.last_reset,
                 now,
@@ -109,7 +120,7 @@ class WakeRuntime:
                 streak=self.gate.streak,
             ):
                 leftover = self.pending
-                self.reset_session(session_id)
+                self.reset_session(session_id, "continuous")
                 self.pending = leftover
             self.last_seen = now
             self.pending = np.concatenate([self.pending, samples])
@@ -124,22 +135,41 @@ class WakeRuntime:
                 score = friday_score(scores)
                 if score > best:
                     best = score
+                if score > self.peak_score:
+                    self.peak_score = score
+                if self.warmup_frames > 0:
+                    self.warmup_frames -= 1
+                    self.gate.reset()
+                    continue
                 decision = self.gate.observe(score, now)
                 if self.debug and score >= self.gate.threshold and not decision.woke:
                     sys.stderr.write(
                         "Wake candidate ignored: Hey Friday "
                         f"(score={score:.2f}, threshold={self.gate.threshold:.2f}, "
+                        f"confirm_frames={self.gate.confirm_frames}, "
                         f"streak={decision.streak}/{self.gate.confirm_frames})\n"
                     )
                 if decision.woke:
                     woke = True
                     woke_score = max(woke_score, score)
 
+            if now - self.last_peak_log >= PASSIVE_LOG_SECONDS:
+                sys.stderr.write(
+                    "Wake passive peak "
+                    f"score={self.peak_score:.2f} "
+                    f"threshold={self.gate.threshold:.2f} "
+                    f"confirm_frames={self.gate.confirm_frames}\n"
+                )
+                self.peak_score = 0.0
+                self.last_peak_log = now
+
             if woke:
                 score = woke_score or best
                 sys.stderr.write(
                     f"Wake detected: {PHRASE} "
-                    f"(score={score:.2f}, threshold={self.gate.threshold:.2f})\n"
+                    f"score={score:.2f} "
+                    f"threshold={self.gate.threshold:.2f} "
+                    f"confirm_frames={self.gate.confirm_frames}\n"
                 )
                 return {"type": "wake", "phrase": PHRASE, "score": round(score, 4)}
             return {"type": "ok"}
@@ -214,7 +244,11 @@ def serve(runtime: WakeRuntime) -> None:
 def main() -> int:
     threshold = float(os.environ.get("WAKEWORD_THRESHOLD", str(DEFAULT_THRESHOLD)))
     cooldown = float(os.environ.get("WAKEWORD_COOLDOWN", "3"))
-    confirm_frames = int(os.environ.get("WAKEWORD_CONFIRM_FRAMES", str(DEFAULT_CONFIRM_FRAMES)))
+    confirm_frames = parse_positive_int(
+        os.environ.get("WAKEWORD_CONFIRM_FRAMES"),
+        DEFAULT_CONFIRM_FRAMES,
+        minimum=1,
+    )
     vad_threshold = float(os.environ.get("WAKEWORD_VAD_THRESHOLD", str(DEFAULT_VAD_THRESHOLD)))
     debug = env_flag("WAKEWORD_DEBUG")
     try:

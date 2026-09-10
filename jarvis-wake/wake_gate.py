@@ -40,6 +40,10 @@ class WakeGate:
     def reset_streak(self) -> None:
         self.streak = 0
 
+    def reset(self) -> None:
+        """Clear confirmation state. Cooldown is left intact."""
+        self.reset_streak()
+
     def observe(self, score: float, now: float) -> WakeDecision:
         if score < self.threshold:
             self.streak = 0
@@ -56,6 +60,18 @@ class WakeGate:
         self.last_wake = now
         self.streak = 0
         return WakeDecision(woke=True, streak=0, score=score)
+
+
+def parse_positive_int(raw: str | None, default: int, *, minimum: int = 1) -> int:
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        return default
+    if value < minimum:
+        return minimum
+    return value
 
 
 def friday_score(scores: dict) -> float:

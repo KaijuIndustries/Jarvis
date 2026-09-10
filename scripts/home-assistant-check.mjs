@@ -122,18 +122,38 @@ async function main() {
       return;
     }
     case "areas": {
-      const areas = await haFetch("/config/area_registry/list");
-      const rows = Array.isArray(areas) ? areas : areas?.result ?? areas?.areas ?? [];
+      const rendered = await haFetch("/template", {
+        method: "POST",
+        body: {
+          template:
+            "{% for area_id in areas() %}{{ area_id }}|{{ area_name(area_id) }}\n{% endfor %}",
+        },
+      });
+      const text = typeof rendered === "string" ? rendered : String(rendered ?? "");
       printJson(
-        (Array.isArray(rows) ? rows : []).map((area) => ({
-          area_id: area.area_id,
-          name: area.name,
-        })),
+        text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const separator = line.indexOf("|");
+            return {
+              area_id: separator > 0 ? line.slice(0, separator) : line,
+              name: separator > 0 ? line.slice(separator + 1) : line,
+            };
+          }),
       );
       return;
     }
     case "registry-list": {
-      printJson(await haFetch("/config/entity_registry/list"));
+      const rendered = await haFetch("/template", {
+        method: "POST",
+        body: {
+          template:
+            "{% for s in states %}{% set aid = area_id(s.entity_id) %}{% if aid %}{{ s.entity_id }}|{{ aid }}\n{% endif %}{% endfor %}",
+        },
+      });
+      printJson(rendered);
       return;
     }
     case "registry": {
@@ -159,8 +179,25 @@ async function main() {
       }
       const body = { entity_id: entityId };
       if (area && area !== "--name") {
-        const areas = await haFetch("/config/area_registry/list");
-        const rows = Array.isArray(areas) ? areas : areas?.result ?? areas?.areas ?? [];
+        const rendered = await haFetch("/template", {
+          method: "POST",
+          body: {
+            template:
+              "{% for area_id in areas() %}{{ area_id }}|{{ area_name(area_id) }}\n{% endfor %}",
+          },
+        });
+        const text = typeof rendered === "string" ? rendered : String(rendered ?? "");
+        const rows = text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const separator = line.indexOf("|");
+            return {
+              area_id: separator > 0 ? line.slice(0, separator).trim() : "",
+              name: separator > 0 ? line.slice(separator + 1).trim() : line,
+            };
+          });
         const needle = area.trim().toLowerCase();
         const matches = (Array.isArray(rows) ? rows : []).filter(
           (item) => String(item.name ?? "").trim().toLowerCase() === needle,

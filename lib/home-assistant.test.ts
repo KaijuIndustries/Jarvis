@@ -16,6 +16,8 @@ import {
   isAffirmativeConfirmation,
   peekPendingConfiguration,
   PENDING_CONFIGURATION_TTL_MS,
+  parseDelimitedAreas,
+  parseDelimitedEntityAreas,
   redactSecrets,
   refreshHomeAssistantCatalog,
   resetHomeAssistantCacheForTests,
@@ -176,6 +178,12 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function servicePosts() {
+  return requests.filter(
+    (request) => request.method === "POST" && request.url.includes("/api/services/"),
+  );
+}
+
 function captureLogs() {
   logs = [];
   const originalLog = console.log;
@@ -259,11 +267,30 @@ const mockFetch: typeof fetch = async (input, init) => {
     }
     return jsonResponse(ids.map((id) => states[id]));
   }
+  if (url === `${BASE}/api/template` && method === "POST") {
+    const template = String((body as { template?: unknown })?.template ?? "");
+    if (template.includes("areas()")) {
+      return new Response(
+        areas.map((area) => `${area.area_id}|${area.name}`).join("\n"),
+        { status: 200, headers: { "Content-Type": "text/plain" } },
+      );
+    }
+    if (template.includes("area_id(s.entity_id)") || template.includes("area_id(")) {
+      return new Response(
+        Object.values(registry)
+          .filter((entry) => entry.area_id)
+          .map((entry) => `${entry.entity_id}|${entry.area_id}`)
+          .join("\n"),
+        { status: 200, headers: { "Content-Type": "text/plain" } },
+      );
+    }
+    return jsonResponse({ message: "Unknown template." }, 400);
+  }
   if (url === `${BASE}/api/config/area_registry/list` && method === "GET") {
-    return jsonResponse(areas);
+    return jsonResponse({ message: "Not found." }, 404);
   }
   if (url === `${BASE}/api/config/entity_registry/list` && method === "GET") {
-    return jsonResponse(Object.values(registry));
+    return jsonResponse({ message: "Not found." }, 404);
   }
   const registryMatch = url.match(/\/api\/config\/entity_registry\/([^/?]+)$/);
   if (registryMatch && method === "GET") {
@@ -385,7 +412,25 @@ test("get_areas lists Home Assistant rooms by name", async () => {
   assert.ok(
     (result.areas as Array<{ area_id?: string }>).every((area) => area.area_id === undefined),
   );
+  assert.ok(requests.some((request) => request.url.endsWith("/api/template")));
+  assert.ok(
+    requests.every((request) => !request.url.includes("/config/area_registry/list")),
+  );
   assertNoSecretLeak(result);
+});
+
+test("parses Home Assistant template area and entity-room lines", () => {
+  assert.deepEqual(parseDelimitedAreas("kitchen|Kitchen\nliving_room|Living Room\n"), [
+    { area_id: "kitchen", name: "Kitchen" },
+    { area_id: "living_room", name: "Living Room" },
+  ]);
+  assert.deepEqual(
+    parseDelimitedEntityAreas("light.kitchen|kitchen\nlight.hue_play_1|living_room\n"),
+    [
+      { entity_id: "light.kitchen", area_id: "kitchen" },
+      { entity_id: "light.hue_play_1", area_id: "living_room" },
+    ],
+  );
 });
 
 test("catalogue prompt includes area names and joined entity rooms", () => {
@@ -443,10 +488,7 @@ test("unknown entity returns entity_not_found after one discovery refresh", asyn
   assert.equal(result.error, "entity_not_found");
   assert.equal(result.entity_id, "light.workshop");
   assert.ok(requests.some((request) => request.url === `${BASE}/api/states`));
-  assert.equal(
-    requests.filter((request) => request.method === "POST").length,
-    1,
-  );
+  assert.equal(servicePosts().length, 1);
   assertNoSecretLeak(result);
 });
 
@@ -461,10 +503,7 @@ test("unknown entity refreshes discovery and retries the service once", async ()
   assert.equal(result.success, true);
   assert.equal(result.entity_id, "light.hallway");
   assert.equal(result.state, "on");
-  assert.equal(
-    requests.filter((request) => request.method === "POST").length,
-    2,
-  );
+  assert.equal(servicePosts().length, 2);
   assert.ok(requests.some((request) => request.url === `${BASE}/api/states`));
   assertNoSecretLeak(result);
 });
@@ -484,7 +523,7 @@ test("ambiguous kitchen lights are not chosen at random", async () => {
   assert.ok(
     matches.some((match) => match.entity_id === "light.kitchen_under_cabinet"),
   );
-  assert.equal(requests.filter((request) => request.method === "POST").length, 0);
+  assert.equal(servicePosts().length, 0);
   assertNoSecretLeak(result);
 });
 

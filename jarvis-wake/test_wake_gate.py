@@ -3,6 +3,7 @@ import unittest
 from wake_gate import (
     WakeGate,
     friday_score,
+    parse_positive_int,
     should_reset_continuous_session,
     vad_gated_score,
 )
@@ -39,11 +40,50 @@ class WakeGateTests(unittest.TestCase):
 
     def test_session_reset_clears_partial_confirmation(self) -> None:
         self.gate.observe(0.9, now=1.0)
-        self.gate.reset_streak()
+        self.gate.reset()
         after_reset = self.gate.observe(0.9, now=1.1)
         self.assertFalse(after_reset.woke)
         confirmed = self.gate.observe(0.9, now=1.2)
         self.assertTrue(confirmed.woke)
+
+    def test_one_positive_frame_does_not_wake(self) -> None:
+        self.assertFalse(self.gate.observe(0.7, now=1.0).woke)
+        self.assertEqual(self.gate.streak, 1)
+
+    def test_two_consecutive_positive_frames_wake(self) -> None:
+        self.assertFalse(self.gate.observe(0.7, now=1.0).woke)
+        self.assertTrue(self.gate.observe(0.8, now=1.08).woke)
+
+    def test_positive_then_negative_does_not_wake(self) -> None:
+        self.assertFalse(self.gate.observe(0.7, now=1.0).woke)
+        self.assertFalse(self.gate.observe(0.2, now=1.08).woke)
+        self.assertFalse(self.gate.observe(0.8, now=1.16).woke)
+        self.assertEqual(self.gate.streak, 1)
+
+    def test_three_frames_required_when_confirm_is_three(self) -> None:
+        gate = WakeGate(threshold=0.5, confirm_frames=3, cooldown_seconds=0)
+        self.assertFalse(gate.observe(0.7, now=1.0).woke)
+        self.assertFalse(gate.observe(0.8, now=1.08).woke)
+        self.assertTrue(gate.observe(0.9, now=1.16).woke)
+
+    def test_two_frames_do_not_wake_when_confirm_is_three(self) -> None:
+        gate = WakeGate(threshold=0.5, confirm_frames=3, cooldown_seconds=0)
+        self.assertFalse(gate.observe(0.7, now=1.0).woke)
+        self.assertFalse(gate.observe(0.8, now=1.08).woke)
+        self.assertEqual(gate.streak, 2)
+
+    def test_confirmation_counter_clears_after_accepted_wake(self) -> None:
+        self.assertFalse(self.gate.observe(0.7, now=1.0).woke)
+        self.assertTrue(self.gate.observe(0.8, now=1.08).woke)
+        self.assertEqual(self.gate.streak, 0)
+
+    def test_invalid_confirm_frames_env_falls_back_safely(self) -> None:
+        self.assertEqual(parse_positive_int(None, 2), 2)
+        self.assertEqual(parse_positive_int("", 2), 2)
+        self.assertEqual(parse_positive_int("nope", 2), 2)
+        self.assertEqual(parse_positive_int("0", 2), 1)
+        self.assertEqual(parse_positive_int("-3", 2), 1)
+        self.assertEqual(parse_positive_int("3", 2), 3)
 
     def test_vad_rejects_non_speech_even_with_high_raw_score(self) -> None:
         gated = vad_gated_score(0.95, speech=False)

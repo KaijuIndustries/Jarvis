@@ -313,6 +313,7 @@ async function haRequest<T>(
     body?: unknown;
     signal?: AbortSignal;
     timeoutMs?: number;
+    rawText?: boolean;
   } = {},
 ): Promise<T> {
   const url = homeAssistantUrl();
@@ -382,6 +383,16 @@ async function haRequest<T>(
     return null as T;
   }
 
+  if (init.rawText) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (typeof parsed === "string") return parsed as T;
+    } catch {
+      // Template endpoints often return plain text.
+    }
+    return text as T;
+  }
+
   try {
     return JSON.parse(text) as T;
   } catch {
@@ -391,6 +402,20 @@ async function haRequest<T>(
       response.status,
     );
   }
+}
+
+const AREAS_TEMPLATE =
+  "{% for area_id in areas() %}{{ area_id }}|{{ area_name(area_id) }}\n{% endfor %}";
+const ENTITY_AREAS_TEMPLATE =
+  "{% for s in states %}{% set aid = area_id(s.entity_id) %}{% if aid %}{{ s.entity_id }}|{{ aid }}\n{% endif %}{% endfor %}";
+
+async function haTemplate(template: string, signal?: AbortSignal): Promise<string> {
+  return haRequest<string>("/template", {
+    method: "POST",
+    body: { template },
+    signal,
+    rawText: true,
+  });
 }
 
 async function readHaMessage(response: Response, fallback: string): Promise<string> {
@@ -470,8 +495,8 @@ export async function fetchHomeAssistantAreas(
     }
   }
   areaInFlight = (async () => {
-    const body = await haRequest<unknown>("/config/area_registry/list", { signal });
-    const areas = parseAreaList(body);
+    const rendered = await haTemplate(AREAS_TEMPLATE, signal);
+    const areas = parseDelimitedAreas(rendered);
     areaCache = { fetchedAt: Date.now(), areas };
     return areas;
   })().finally(() => {
@@ -488,8 +513,8 @@ export async function refreshHomeAssistantAreas(signal?: AbortSignal): Promise<H
 export async function fetchEntityRegistryList(
   signal?: AbortSignal,
 ): Promise<HaEntityRegistry[]> {
-  const body = await haRequest<unknown>("/config/entity_registry/list", { signal });
-  return parseEntityRegistryList(body);
+  const rendered = await haTemplate(ENTITY_AREAS_TEMPLATE, signal);
+  return parseDelimitedEntityAreas(rendered);
 }
 
 export async function fetchEntityRegistryEntry(
@@ -535,6 +560,40 @@ export async function updateEntityRegistry(
     );
   }
   return parsed;
+}
+
+export function parseDelimitedAreas(text: string): HaArea[] {
+  const areas: HaArea[] = [];
+  const seen = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed === "None" || trimmed === "null") continue;
+    const separator = trimmed.indexOf("|");
+    if (separator <= 0) continue;
+    const areaId = trimmed.slice(0, separator).trim();
+    const name = trimmed.slice(separator + 1).trim();
+    if (!areaId || !name || seen.has(areaId)) continue;
+    seen.add(areaId);
+    areas.push({ area_id: areaId, name });
+  }
+  return areas;
+}
+
+export function parseDelimitedEntityAreas(text: string): HaEntityRegistry[] {
+  const entries: HaEntityRegistry[] = [];
+  const seen = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const separator = trimmed.indexOf("|");
+    if (separator <= 0) continue;
+    const entityId = validateEntityId(trimmed.slice(0, separator).trim());
+    const areaId = trimmed.slice(separator + 1).trim();
+    if (!entityId || !areaId || seen.has(entityId)) continue;
+    seen.add(entityId);
+    entries.push({ entity_id: entityId, area_id: areaId });
+  }
+  return entries;
 }
 
 export function parseAreaList(body: unknown): HaArea[] {
@@ -822,10 +881,8 @@ export async function getCachedEntities(options?: {
   cacheInFlight = (async () => {
     const states = await fetchHomeAssistantStates(options?.signal);
     const [areas, registry] = await Promise.all([
-      fetchHomeAssistantAreas(options?.signal, Boolean(options?.force)).catch(
-        () => areaCache?.areas ?? [],
-      ),
-      fetchEntityRegistryList(options?.signal).catch(() => []),
+      fetchHomeAssistantAreas(options?.signal, Boolean(options?.force)),
+      fetchEntityRegistryList(options?.signal),
     ]);
     const entities = applyEntityAreas(
       states
